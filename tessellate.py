@@ -1,0 +1,110 @@
+"""
+tessellate.py
+=============
+Step 1 of the ViP-SegD pipeline.
+Runs Mussel tiling on one WSI using settings from config.py.
+
+Output directory
+----------------
+    cfg.OUT_DIR/<slide_name>/tessellation/
+        patches/
+        mask.png
+        grid_mask.png
+        thumbnail.png
+        <slide>.h5
+
+Usage
+-----
+    from tessellate import run_tessellation
+    from config import cfg
+
+    outdir = run_tessellation(
+        wsi_path = "slides/TCGA-A1-A0SP.svs",
+        cfg      = cfg,
+    )
+"""
+
+import sys
+from pathlib import Path
+
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
+from config import cfg as default_cfg, PipelineConfig
+
+
+def run_tessellation(
+    wsi_path: str,
+    cfg: PipelineConfig = None,
+) -> str:
+    """
+    Run Mussel tiling on a single WSI.
+
+    Parameters
+    ----------
+    wsi_path : path to .svs / .tif
+    cfg      : PipelineConfig (defaults to config.cfg singleton)
+
+    Returns
+    -------
+    str : path to the slide tessellation directory
+          cfg.OUT_DIR/<slide_name>/tessellation/
+          contains: patches/, mask.png, grid_mask.png, thumbnail.png, <slide>.h5
+    """
+    if cfg is None:
+        cfg = default_cfg
+
+    # Add Mussel to path at call time — not at import time
+    # so the module works even if Mussel is not installed globally
+    if cfg.MUSSEL_DIR not in sys.path:
+        sys.path.insert(0, cfg.MUSSEL_DIR)
+
+    import mussel.cli.tessellate
+    from mussel.cli.tessellate import TessellateConfig, SegConfig
+
+    wsi        = Path(wsi_path)
+    slide_name = wsi.stem
+    outdir     = Path(cfg.OUT_DIR) / slide_name / "tessellation"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    output_h5_path = outdir / f"{slide_name}.h5"
+
+    print(f"\n{'='*55}")
+    print(f"  Tessellation")
+    print(f"  Slide      : {wsi.name}")
+    print(f"  Patch size : {cfg.PATCH_SIZE}")
+    print(f"  Workers    : {cfg.WORKERS}")
+    print(f"  Output     : {outdir}")
+    print(f"{'='*55}")
+
+    seg_config = SegConfig(
+        patch_size        = cfg.PATCH_SIZE,
+        use_otsu          = True,
+        segment_threshold = cfg.SEGMENT_THRESH,
+    )
+
+    tess_config = TessellateConfig(
+        slide_path            = str(wsi),
+        output_h5_path        = str(output_h5_path),
+        output_png_dir        = str(outdir / "patches"),
+        output_mask_path      = str(outdir / "mask.png"),
+        output_grid_mask_path = str(outdir / "grid_mask.png"),
+        output_thumbnail_path = str(outdir / "thumbnail.png"),
+        thumbnail_size        = cfg.THUMBNAIL_SIZE,
+        seg_config            = seg_config,
+        num_workers           = cfg.WORKERS,
+    )
+
+    with tqdm(total=1, desc="Tessellating tiles", unit="slide") as pbar:
+        mussel.cli.tessellate.main(OmegaConf.create(tess_config))
+        pbar.update(1)
+
+    if output_h5_path.exists():
+        n_patches = len(list((outdir / "patches").glob("*.png")))
+        print(f"\n  Done. {n_patches:,} patches saved → {outdir}")
+        return str(outdir)
+    else:
+        raise RuntimeError(
+            f"Tessellation failed for {wsi_path}\n"
+            f"Expected H5 at: {output_h5_path}"
+        )
