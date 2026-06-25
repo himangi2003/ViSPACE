@@ -125,14 +125,14 @@ Your project layout should look like:
 #### Step 2: Set the Mussel path in `config.py`
 
 Open `config.py` and set `MUSSEL_DIR` to point to the cloned folder.
-All other required fields are marked with `✏`:
+All other required fields are marked with `=`:
 
 ```python
 @dataclass
 class PipelineConfig:
     # ── ✏  REQUIRED — set these before running ─────────────────────────────
     OUT_DIR:    str = "vipsegd_output"              # root directory for all outputs
-    CHECKPOINT: str = "weights/phaseB_best.pt"      # path to ViP-SegD checkpoint
+    CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"      # path to ViP-SegD checkpoint
     WSI_PATH:   str = "slides/your_slide.svs"       # path to your .svs / .tif slide
 
     # ── Mussel (tessellation) ───────────────────────────────────────────────
@@ -197,7 +197,7 @@ git clone https://github.com/pathology-data-mining/Mussel.git ViP-SegD/Mussel
 
 ### 4. Download model weights
 
-Download the ViP-SegD checkpoint and place it at the path specified by `cfg.CHECKPOINT` (default: `weights/phaseB_best.pt`).  
+Download the ViP-SegD checkpoint and place it at the path specified by `cfg.CHECKPOINT` (default: `TNBC_weights/TNBC_best.pt`).  
 Virchow2 encoder weights are fetched automatically from Hugging Face Hub unless `cfg.VIRCHOW2_PATH` is set to a local directory.
 
 ---
@@ -346,7 +346,7 @@ my_cfg = replace(cfg,
 | Field | Default | Description |
 |-------|---------|-------------|
 | `OUT_DIR` | `"vipsegd_output"` | Root output directory |
-| `CHECKPOINT` | `"weights/phaseB_best.pt"` | Path to ViP-SegD model weights |
+| `CHECKPOINT` | `"TNBC_weights/TNBC_best.pt"` | Path to ViP-SegD model weights |
 | `DATA_PATH` | `"histology/"` | Folder containing WSI files |
 
 ### Key optional fields
