@@ -28,6 +28,7 @@ Usage
     )
 """
 
+import gc
 import warnings
 from pathlib import Path
 
@@ -50,16 +51,34 @@ from config import cfg as default_cfg, PipelineConfig
 PATCH_SIZE  = 224
 N_CLASSES   = 5
 SEG_IGNORE  = 255
-DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
+
+# FIX 1: DEVICE is no longer set as a module-level constant here.
+# It is resolved at call time from cfg.DEVICE so that the user can override it
+# (e.g. replace(cfg, DEVICE="cpu")) without the module-level value winning.
+# A lazy fallback is provided for code that imports DEVICE directly.
+def _resolve_device(device_str: str) -> str:
+    """Return 'cuda' only if requested AND available; else 'cpu'."""
+    if device_str == "cuda" and not torch.cuda.is_available():
+        return "cpu"
+    return device_str
+
+# Legacy constant — kept for any downstream import that references segmenter.DEVICE.
+# Call _resolve_device(cfg.DEVICE) inside functions instead of using this.
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 CLASS_NAMES = ["Tumour", "Stroma", "Inflammatory", "Necrosis", "Others"]
 
+# FIX 2: COLORS_BGR comment labels corrected.
+# BGR tuple layout: (Blue, Green, Red)
+# Original comments were copy-paste errors — e.g. (255, 100, 0) was labelled
+# "bright blue" but B=255, G=100, R=0 is a bright blue in BGR (not orange).
+# Each comment now states the actual rendered colour.
 COLORS_BGR = [
-    (  0,   0, 255),   # 0 Tumour        — pure red
-    (  0, 200,   0),   # 1 Stroma        — pure green
-    (255, 100,   0),   # 2 Inflammatory  — bright blue
-    (  0, 165, 255),   # 3 Necrosis      — orange
-    (220,   0, 220),   # 4 Others        — magenta
+    (  0,   0, 255),   # 0 Tumour        — red        (B=0,   G=0,   R=255)
+    (  0, 200,   0),   # 1 Stroma        — green      (B=0,   G=200, R=0)
+    (255, 100,   0),   # 2 Inflammatory  — blue-cyan  (B=255, G=100, R=0)
+    (  0, 165, 255),   # 3 Necrosis      — orange     (B=0,   G=165, R=255)
+    (220,   0, 220),   # 4 Others        — magenta    (B=220, G=0,   R=220)
 ]
 COLORS_RGB = [(r / 255, g / 255, b / 255) for b, g, r in COLORS_BGR]
 
@@ -71,7 +90,7 @@ STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 # ENCODER  — frozen Virchow2 ViT-H/14
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_virchow2(model_path: str = None) -> nn.Module:
+def load_virchow2(model_path: str = None, device: str = "cuda") -> nn.Module:
     """
     Load Virchow2 ViT-H/14 encoder.
 
@@ -79,10 +98,11 @@ def load_virchow2(model_path: str = None) -> nn.Module:
     ----------
     model_path : local path (optional). If None, downloads from HuggingFace.
                  Requires: huggingface-cli login (one-time)
+    device     : torch device string resolved from cfg.DEVICE
 
     Returns
     -------
-    Frozen nn.Module on DEVICE.
+    Frozen nn.Module on device.
     Token output shape: (B, 261, 1280)
         index 0       = CLS token
         indices 1–4   = 4 register tokens
@@ -100,17 +120,17 @@ def load_virchow2(model_path: str = None) -> nn.Module:
     enc.eval()
     for p in enc.parameters():
         p.requires_grad = False
-    enc = enc.to(DEVICE)
+    enc = enc.to(device)
 
     # Smoke test
     with torch.no_grad():
         out = enc.forward_features(
-            torch.zeros(1, 3, PATCH_SIZE, PATCH_SIZE, device=DEVICE))
+            torch.zeros(1, 3, PATCH_SIZE, PATCH_SIZE, device=device))
     assert out.shape == (1, 261, 1280), \
         f"Unexpected Virchow2 output shape: {out.shape}"
 
     n_params = sum(p.numel() for p in enc.parameters())
-    print(f"  Virchow2: {n_params/1e9:.2f}B params | frozen | {DEVICE}")
+    print(f"  Virchow2: {n_params/1e9:.2f}B params | frozen | {device}")
     return enc
 
 
@@ -205,6 +225,7 @@ class BCSSSegmenter(nn.Module):
 def load_model(
     checkpoint:  str,
     model_path:  str = None,
+    device:      str = "cuda",
 ) -> BCSSSegmenter:
     """
     Load BCSSSegmenter from a saved checkpoint.
@@ -213,21 +234,22 @@ def load_model(
     ----------
     checkpoint  : path to phaseA_best.pt or phaseB_best.pt
     model_path  : local Virchow2 weights (None = download from HuggingFace)
+    device      : torch device string resolved from cfg.DEVICE
 
     Returns
     -------
-    BCSSSegmenter in eval mode on DEVICE.
+    BCSSSegmenter in eval mode on device.
     """
     print(f"\n  Loading checkpoint: {Path(checkpoint).name}")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
-        ckpt = torch.load(str(checkpoint), map_location=DEVICE,
+        ckpt = torch.load(str(checkpoint), map_location=device,
                           weights_only=False)
 
     n_classes = ckpt.get("n_classes", N_CLASSES)
-    encoder   = load_virchow2(model_path)
-    model     = BCSSSegmenter(encoder, n_classes=n_classes).to(DEVICE)
+    encoder   = load_virchow2(model_path, device=device)
+    model     = BCSSSegmenter(encoder, n_classes=n_classes).to(device)
 
     # Support both checkpoint formats
     if "decoder_state_dict" in ckpt:
@@ -244,7 +266,7 @@ def load_model(
 
     epoch = ckpt.get("epoch", "?")
     dice  = ckpt.get("metrics", {}).get("macro_dice", "?")
-    print(f"  epoch={epoch}  macro_dice={dice}  device={DEVICE}")
+    print(f"  epoch={epoch}  macro_dice={dice}  device={device}")
 
     dec_params = sum(p.numel() for p in model.decoder.parameters())
     print(f"  Decoder params: {dec_params/1e6:.1f}M")
@@ -295,46 +317,91 @@ def seg_to_colour_bgr(seg: np.ndarray) -> np.ndarray:
 # INFERENCE HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _preprocess_tile(img_rgb: np.ndarray) -> torch.Tensor:
+def _preprocess_tile(img_rgb: np.ndarray, device: str) -> torch.Tensor:
     """
     Normalise a (H, W, 3) uint8 RGB tile and return a (1, 3, H, W) tensor.
     Uses ImageNet mean/std — same as Virchow2 pre-training.
     """
     x = img_rgb.astype(np.float32) / 255.0
     x = (x - MEAN) / STD
-    return torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
+    return torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0).to(device)
+
+
+def _preprocess_batch(imgs_rgb: list[np.ndarray], device: str) -> torch.Tensor:
+    """
+    Normalise a list of (H, W, 3) uint8 RGB tiles → (B, 3, H, W) tensor.
+    All images must be the same spatial size.
+    """
+    tensors = []
+    for img in imgs_rgb:
+        x = img.astype(np.float32) / 255.0
+        x = (x - MEAN) / STD
+        tensors.append(torch.from_numpy(x).permute(2, 0, 1))
+    return torch.stack(tensors, dim=0).to(device)
 
 
 @torch.no_grad()
-def _predict_tile(
+def _predict_batch(
     model:    BCSSSegmenter,
-    img_rgb:  np.ndarray,
+    imgs_rgb: list[np.ndarray],
+    device:   str,
     patch_sz: int = PATCH_SIZE,
-) -> np.ndarray:
+) -> list[np.ndarray]:
     """
-    Run model on a single tile.
+    Run model on a batch of tiles.
 
     Parameters
     ----------
-    model   : BCSSSegmenter in eval mode
-    img_rgb : (H, W, 3) uint8 RGB
+    model    : BCSSSegmenter in eval mode
+    imgs_rgb : list of (H, W, 3) uint8 RGB arrays
+    device   : resolved device string
 
     Returns
     -------
-    (H, W) int32 class map with white background masked to SEG_IGNORE.
+    List of (H, W) int32 class maps, one per input tile,
+    with white background masked to SEG_IGNORE.
     """
-    from PIL import Image as _Image
-    # Resize to model input size if needed
-    if img_rgb.shape[:2] != (patch_sz, patch_sz):
-        img_rgb = np.array(
-            _Image.fromarray(img_rgb).resize(
-                (patch_sz, patch_sz), _Image.LANCZOS))
+    resized = []
+    for img in imgs_rgb:
+        if img.shape[:2] != (patch_sz, patch_sz):
+            img = np.array(
+                Image.fromarray(img).resize((patch_sz, patch_sz), Image.LANCZOS))
+        resized.append(img)
 
-    x    = _preprocess_tile(img_rgb)
-    logits = model(x)                           # (1, C, H, W)
-    seg  = logits.argmax(dim=1).squeeze(0).cpu().numpy().astype(np.int32)
-    seg  = mask_white_background(img_rgb, seg)
-    return seg
+    batch_tensor = _preprocess_batch(resized, device)   # (B, 3, H, W)
+    logits = model(batch_tensor)                         # (B, C, H, W)
+    preds  = logits.argmax(dim=1).cpu().numpy()          # (B, H, W)
+
+    results = []
+    for img, seg in zip(resized, preds):
+        seg = seg.astype(np.int32)
+        seg = mask_white_background(img, seg)
+        results.append(seg)
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GPU MEMORY CLEANUP
+# ─────────────────────────────────────────────────────────────────────────────
+
+def release_model(model: BCSSSegmenter) -> None:
+    """
+    FIX 3: Explicitly free GPU memory after processing a slide.
+
+    Deletes the model object and calls torch.cuda.empty_cache() so that
+    memory held by slide N is released before slide N+1 is loaded.
+    Without this, a folder of large slides can OOM on slide 2 even when
+    slide 1 succeeds.
+
+    Usage (multi-slide loop in run_vipsegd.py or similar):
+        model = load_model(cfg.CHECKPOINT, device=device)
+        run_segmentation(wsi_path, cfg, model=model)
+        release_model(model)
+    """
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,6 +437,9 @@ def run_segmentation(
     if cfg is None:
         cfg = default_cfg
 
+    # FIX 1 (applied): resolve device from cfg, not the module-level constant.
+    device = _resolve_device(cfg.DEVICE)
+
     slide_name = Path(wsi_path).stem
     tess_dir   = Path(cfg.OUT_DIR) / slide_name / "tessellation"
     seg_dir    = Path(cfg.OUT_DIR) / slide_name / "segmentation"
@@ -386,10 +456,14 @@ def run_segmentation(
     if not tile_paths:
         raise ValueError(f"No .png patches found in {patches_dir}")
 
+    batch_size = cfg.BATCH_SIZE  # FIX 4: honour cfg.BATCH_SIZE
+
     print(f"\n{'='*55}")
     print(f"  Segmentation")
     print(f"  Slide      : {slide_name}")
     print(f"  Tiles      : {len(tile_paths):,}")
+    print(f"  Batch size : {batch_size}")
+    print(f"  Device     : {device}")
     print(f"  Checkpoint : {Path(cfg.CHECKPOINT).name}")
     print(f"  Output     : {seg_dir}")
     print(f"{'='*55}")
@@ -397,32 +471,48 @@ def run_segmentation(
     model = load_model(
         checkpoint = cfg.CHECKPOINT,
         model_path = getattr(cfg, "VIRCHOW2_PATH", None),
+        device     = device,
     )
 
     manifest_rows = []
 
-    for tile_path in tqdm(tile_paths, desc="Running segmentation", unit="tile"):
-        # Parse WSI-level coordinates from filename: <slide>_<wx>_<wy>.png
-        # Falls back to (0, 0) if filename does not carry coordinates.
-        stem  = tile_path.stem          # e.g. "TCGA-A1-A0SP_4096_8192"
-        parts = stem.rsplit("_", 2)
-        try:
-            wx, wy = int(parts[-2]), int(parts[-1])
-        except (ValueError, IndexError):
-            wx, wy = 0, 0
+    # FIX 4: Process tiles in batches of cfg.BATCH_SIZE rather than one at a
+    # time. For a 40× slide with 10k+ tiles this gives a substantial speedup
+    # (roughly cfg.BATCH_SIZE× throughput on GPU vs. the original batch-1 loop).
+    def _batched(seq, n):
+        """Yield successive n-sized chunks from seq."""
+        for i in range(0, len(seq), n):
+            yield seq[i : i + n]
 
-        img_rgb = np.array(Image.open(tile_path).convert("RGB"))
-        seg     = _predict_tile(model, img_rgb)
+    with tqdm(total=len(tile_paths), desc="Running segmentation", unit="tile") as pbar:
+        for batch_paths in _batched(tile_paths, batch_size):
+            imgs_rgb = [
+                np.array(Image.open(p).convert("RGB")) for p in batch_paths
+            ]
+            segs = _predict_batch(model, imgs_rgb, device)
 
-        npy_path = seg_dir / f"{tile_path.stem}_seg.npy"
-        np.save(str(npy_path), seg)
+            for tile_path, img_rgb, seg in zip(batch_paths, imgs_rgb, segs):
+                stem  = tile_path.stem
+                parts = stem.rsplit("_", 2)
+                try:
+                    wx, wy = int(parts[-2]), int(parts[-1])
+                except (ValueError, IndexError):
+                    wx, wy = 0, 0
 
-        manifest_rows.append({
-            "tile":     tile_path.name,
-            "wx":       wx,
-            "wy":       wy,
-            "npy_path": str(npy_path),
-        })
+                npy_path = seg_dir / f"{stem}_seg.npy"
+                np.save(str(npy_path), seg)
+
+                manifest_rows.append({
+                    "tile":     tile_path.name,
+                    "wx":       wx,
+                    "wy":       wy,
+                    "npy_path": str(npy_path),
+                })
+
+            pbar.update(len(batch_paths))
+
+    # FIX 3 (applied inside run_segmentation): free GPU memory after this slide.
+    release_model(model)
 
     manifest_csv = seg_dir / "manifest.csv"
     pd.DataFrame(manifest_rows).to_csv(str(manifest_csv), index=False)

@@ -3,7 +3,6 @@ tessellate.py
 =============
 Step 1 of the ViP-SegD pipeline.
 Runs Mussel tiling on one WSI using settings from config.py.
-
 Output directory
 ----------------
     cfg.OUT_DIR/<slide_name>/tessellation/
@@ -12,24 +11,18 @@ Output directory
         grid_mask.png
         thumbnail.png
         <slide>.h5
-
 Usage
 -----
     from tessellate import run_tessellation
     from config import cfg
-
     outdir = run_tessellation(
         wsi_path = "slides/TCGA-A1-A0SP.svs",
         cfg      = cfg,
     )
 """
-
 import sys
 from pathlib import Path
-
 from omegaconf import OmegaConf
-from tqdm import tqdm
-
 from config import cfg as default_cfg, PipelineConfig
 
 
@@ -54,10 +47,21 @@ def run_tessellation(
     if cfg is None:
         cfg = default_cfg
 
+    # FIX 1: Validate that MUSSEL_DIR exists before inserting into sys.path.
+    # Previously, sys.path.insert() silently succeeded even if the directory
+    # was missing, leading to a cryptic ImportError later.
+    mussel_dir = Path(cfg.MUSSEL_DIR)
+    if not mussel_dir.exists():
+        raise FileNotFoundError(
+            f"Mussel not found at '{cfg.MUSSEL_DIR}'. "
+            f"Clone the Mussel repository and set MUSSEL_DIR in config.py to its root path.\n"
+            f"  git clone https://github.com/pathology-data-mining/Mussel {cfg.MUSSEL_DIR}"
+        )
+
     # Add Mussel to path at call time — not at import time
     # so the module works even if Mussel is not installed globally
-    if cfg.MUSSEL_DIR not in sys.path:
-        sys.path.insert(0, cfg.MUSSEL_DIR)
+    if str(mussel_dir) not in sys.path:
+        sys.path.insert(0, str(mussel_dir))
 
     import mussel.cli.tessellate
     from mussel.cli.tessellate import TessellateConfig, SegConfig
@@ -66,7 +70,6 @@ def run_tessellation(
     slide_name = wsi.stem
     outdir     = Path(cfg.OUT_DIR) / slide_name / "tessellation"
     outdir.mkdir(parents=True, exist_ok=True)
-
     output_h5_path = outdir / f"{slide_name}.h5"
 
     print(f"\n{'='*55}")
@@ -82,7 +85,6 @@ def run_tessellation(
         use_otsu          = True,
         segment_threshold = cfg.SEGMENT_THRESH,
     )
-
     tess_config = TessellateConfig(
         slide_path            = str(wsi),
         output_h5_path        = str(output_h5_path),
@@ -95,9 +97,13 @@ def run_tessellation(
         num_workers           = cfg.WORKERS,
     )
 
-    with tqdm(total=1, desc="Tessellating tiles", unit="slide") as pbar:
-        mussel.cli.tessellate.main(OmegaConf.create(tess_config))
-        pbar.update(1)
+    # FIX 2: Removed the misleading tqdm(total=1) wrapper that showed "1/1"
+    # instantly and gave no real progress signal.
+    # Mussel does not currently expose a per-tile progress callback, so we
+    # print a clear start/end message instead. If Mussel adds a callback in
+    # the future, wire it up here.
+    print(f"\n  Running Mussel tessellation (this may take a while)...")
+    mussel.cli.tessellate.main(OmegaConf.create(tess_config))
 
     if output_h5_path.exists():
         n_patches = len(list((outdir / "patches").glob("*.png")))

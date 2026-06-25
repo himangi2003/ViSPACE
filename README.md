@@ -210,11 +210,11 @@ from run_vipsegd import run_vipsegd
 
 # Set the three required fields
 cfg.OUT_DIR    = "vipsegd_output"
-cfg.CHECKPOINT = "TNBC_weights/TNBC_best.pt"
-cfg.DATA_PATH  = "histology/"
+cfg.CHECKPOINT = "TNBC_weights/TNBC_best.pt or where you downlaoded model weights"
+cfg.WSI_PATH  = "Path to your slide"
 
 # Run the full pipeline on one slide
-results = run_vipsegd("histology/TCGA-A1-A0SP.svs", cfg)
+results = run_vipsegd("Path to your slide", cfg)
 
 print(results["success"])          # True if all stages completed
 print(results["total_elapsed_s"])  # Wall-clock seconds

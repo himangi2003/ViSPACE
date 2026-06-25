@@ -39,8 +39,8 @@ class PipelineConfig:
 
     # ── ✏  REQUIRED — set these before running ─────────────────────────────
     OUT_DIR:    str = "vipsegd_output"          # root directory for all outputs
-    CHECKPOINT: str = "weights/phaseB_best.pt"  # path to ViP-SegD model checkpoint
-    WSI_PATH:  str = "TCGA-S3-AA10-01Z-00-DX1.C0468882-0DD8-4FC5-8C2F-E18BE8000F69.tif"              # folder of .svs / .tif slides
+    CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"  # path to ViP-SegD model checkpoint
+    WSI_PATH:  str = "your data path"              #  .svs / .tif slides
 
     # ── Mussel (tessellation) ───────────────────────────────────────────────
     MUSSEL_DIR:     str   = "Mussel/"  # cloned Mussel repo root
@@ -136,7 +136,7 @@ class PipelineConfig:
     @property
     def data_path(self) -> Path:
         """cfg.DATA_PATH as a Path object."""
-        return Path(self.DATA_PATH)
+        return Path(self.WSI_PATH)
 
     @property
     def cohort_features_csv(self) -> str:
