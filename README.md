@@ -111,15 +111,15 @@ git clone https://github.com/pathology-data-mining/Mussel.git
 ```
 
 Your project layout should look like:
-
-# ViP-SegD/
-# ├── Mussel/    ← MUSSEL_DIR points here
-# ├── tessellate.py
-# ├── config.py
-# ├── TNBC_weights/
-# │   └── TNBC_best.pt
-# └── ......
-
+```
+  ViP-SegD/
+  ├── Mussel/    ← MUSSEL_DIR points here
+  ├── tessellate.py
+  ├── config.py
+  ├── TNBC_weights/
+  │   └── TNBC_best.pt
+  └── ......
+```
 
 
 #### Step 2: Set the Mussel path in `config.py`
