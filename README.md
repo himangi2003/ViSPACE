@@ -7,14 +7,15 @@ ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Installation](#installation)
-3. [Quick Start](#quick-start)
-4. [Pipeline Stages](#pipeline-stages)
-5. [Configuration Reference](#configuration-reference)
-6. [Output Directory Layout](#output-directory-layout)
-7. [Feature Descriptions](#feature-descriptions)
-8. [Running Subsets of Stages](#running-subsets-of-stages)
-9. [Dependencies](#dependencies)
+2. [Prerequisites](#prerequisites)
+3. [Installation](#installation)
+4. [Quick Start](#quick-start)
+5. [Pipeline Stages](#pipeline-stages)
+6. [Configuration Reference](#configuration-reference)
+7. [Output Directory Layout](#output-directory-layout)
+8. [Feature Descriptions](#feature-descriptions)
+9. [Running Subsets of Stages](#running-subsets-of-stages)
+10. [Dependencies](#dependencies)
 
 ---
 
@@ -35,6 +36,30 @@ ViP-SegD processes a WSI in eight sequential stages:
 | 8 | Tumour Morphology | `tumor_morphology_features.py` | Shape, fragmentation, and perimeter features per cluster |
 
 **Segmentation classes:** Tumour · Stroma · Necrosis · Inflammatory (TILs) · Others
+
+---
+
+## Prerequisites
+
+### Virchow2 — Gated HuggingFace Model
+
+ViP-SegD uses [Virchow2](https://huggingface.co/paige-ai/Virchow2) as its encoder backbone. Virchow2 is a **gated model** on Hugging Face Hub: you must request access before the weights can be downloaded.
+
+1. Go to the [Virchow2 model page](https://huggingface.co/paige-ai/Virchow2) and click **Request access**. Access is typically granted within minutes.
+2. Install the Hugging Face CLI and authenticate:
+
+```bash
+pip install huggingface_hub
+huggingface-cli login          # paste your HF access token when prompted
+```
+
+3. Once authenticated, Virchow2 weights are fetched automatically at first run. Alternatively, set `cfg.VIRCHOW2_PATH` to a local directory containing a pre-downloaded copy.
+
+> **License note:** Virchow2 is released under the [Paige AI Research License](https://huggingface.co/paige-ai/Virchow2/blob/main/LICENSE). Review the terms before using ViP-SegD in commercial or clinical settings.
+
+### Mussel — WSI Tessellation Backend
+
+Stage 1 (Tessellation) depends on [Mussel](https://github.com/pathology-data-mining/Mussel), an open-source WSI tiling library. It is installed via pip directly from GitHub (see Installation step 3 below) and is already pinned in `VipsegD_requirements.txt`.
 
 ---
 
@@ -359,10 +384,28 @@ See `ViP-SegD_environment.yml` for the complete pinned environment and `VipsegD_
 
 ## Citation
 
-If you use ViP-SegD in your research, please cite the associated publication (forthcoming).
+If you use ViP-SegD in your research, please cite the associated publication (forthcoming). In the meantime, you can cite this repository directly:
+
+```
+@software{vipsegd,
+  author  = {Srivastava, Himangi},
+  title   = {{ViP-SegD}: Virchow2-Powered Segmentation \& Spatial Feature Pipeline},
+  url     = {https://github.com/himangi2003/ViPsegD},
+  year    = {2024},
+}
+```
+
+Please also cite the underlying models and tools this pipeline depends on:
+
+- **Virchow2:** Vorontsov et al., *A foundation model for clinical-grade computational pathology and biomarker discovery in oncology*, Nature Medicine 2024.
+- **Mussel:** [pathology-data-mining/Mussel](https://github.com/pathology-data-mining/Mussel)
 
 ---
 
 ## License
 
-See `LICENSE` for terms of use.
+ViP-SegD source code is released under the [MIT License](LICENSE).
+
+Note that use of this pipeline is additionally subject to the terms of its dependencies:
+- **Virchow2** model weights are governed by the [Paige AI Research License](https://huggingface.co/paige-ai/Virchow2/blob/main/LICENSE) — review before commercial or clinical use.
+- **Mussel** is released under its own open-source license; see the [Mussel repository](https://github.com/pathology-data-mining/Mussel) for details.
