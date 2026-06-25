@@ -5,7 +5,7 @@ ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image
 ---
 
 ## Table of Contents
-
+0. [Prerequisites](#Prerequisites)
 1. [Overview](#overview)
 2. [Installation](#installation)
 3. [Quick Start](#quick-start)
@@ -60,9 +60,7 @@ huggingface-cli login
 Verify authentication was successful:
 ```bash
 huggingface-cli whoami
-# Should print your Hugging Face username
 ```
-
 To make the token persist across sessions, export it in your shell profile:
 ```bash
 echo 'export HF_TOKEN=hf_your_token_here' >> ~/.bashrc   # or ~/.zshrc
@@ -92,18 +90,69 @@ os.environ["HF_TOKEN"] = HF_ACCESS_TOKEN
 print("HF_TOKEN environment variable set.")
 ```
 
-Expected output:
-Authenticated as: your-hf-username
+> ⚠️ **Before committing your notebook**, clear the token from this cell:  
+> `Kernel → Restart Kernel and Clear All Outputs`, then replace the token string with `""` or a placeholder.  
+> Consider using `python-dotenv` or JupyterLab's secret manager to avoid ever hardcoding tokens.
 
-HF_TOKEN environment variable set.
+---
+
+> **License note:** Virchow2 is released under the [Paige AI Research License](https://huggingface.co/paige-ai/Virchow2/blob/main/LICENSE). Review the terms before using ViP-SegD in commercial or clinical settings.
 
 ---
 
 ### 2. Mussel — WSI Tessellation Backend
 
-Stage 1 (Tessellation) depends on [Mussel](https://github.com/pathology-data-mining/Mussel), an open-source WSI tiling library. It is installed via pip directly from GitHub (see Installation step 3 below) and is already pinned in `VipsegD_requirements.txt`.
+(Tessellation) depends on [Mussel](https://github.com/pathology-data-mining/Mussel), an open-source library.
+
+#### Step 1: Download Mussel
+Clone or download the Mussel repository and place it in your project directory:
+```bash
+git clone https://github.com/pathology-data-mining/Mussel.git
+```
+
+Your project layout should look like:
+
+# ViP-SegD/
+# ├── Mussel/    ← MUSSEL_DIR points here
+# ├── tessellate.py
+# ├── config.py
+# ├── TNBC_weights/
+# │   └── TNBC_best.pt
+# └── ......
 
 
+
+#### Step 2: Set the Mussel path in `config.py`
+
+Open `config.py` and set `MUSSEL_DIR` to point to the cloned folder.
+All other required fields are marked with `✏`:
+
+```python
+@dataclass
+class PipelineConfig:
+    # ── ✏  REQUIRED — set these before running ─────────────────────────────
+    OUT_DIR:    str = "vipsegd_output"              # root directory for all outputs
+    CHECKPOINT: str = "weights/phaseB_best.pt"      # path to ViP-SegD checkpoint
+    WSI_PATH:   str = "slides/your_slide.svs"       # path to your .svs / .tif slide
+
+    # ── Mussel (tessellation) ───────────────────────────────────────────────
+    MUSSEL_DIR:     str   = "Mussel/"               # ✏ path to cloned Mussel repo root
+    PATCH_SIZE:     int   = 224
+    WORKERS:        int   = 4
+    SEGMENT_THRESH: int   = 20
+    THUMBNAIL_SIZE: tuple = (1024, 1024)
+```
+
+> `tessellate.py` inserts `cfg.MUSSEL_DIR` into `sys.path` at call time, so Mussel
+> does **not** need to be installed globally — pointing `MUSSEL_DIR` at the
+> downloaded folder is sufficient.
+
+#### Step 3: Verify the layout
+After cloning, confirm the expected Mussel entry point exists:
+```bash
+ls Mussel/mussel/cli/tessellate.py
+```
+--- 
 
 ## Overview
 
