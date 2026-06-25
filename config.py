@@ -40,10 +40,10 @@ class PipelineConfig:
     # ── ✏  REQUIRED — set these before running ─────────────────────────────
     OUT_DIR:    str = "vipsegd_output"          # root directory for all outputs
     CHECKPOINT: str = "weights/phaseB_best.pt"  # path to ViP-SegD model checkpoint
-    DATA_PATH:  str = "histology/"              # folder of .svs / .tif slides
+    WSI_PATH:  str = "TCGA-S3-AA10-01Z-00-DX1.C0468882-0DD8-4FC5-8C2F-E18BE8000F69.tif"              # folder of .svs / .tif slides
 
     # ── Mussel (tessellation) ───────────────────────────────────────────────
-    MUSSEL_DIR:     str   = "ViP-SegD/Mussel/"  # cloned Mussel repo root
+    MUSSEL_DIR:     str   = "Mussel/"  # cloned Mussel repo root
     PATCH_SIZE:     int   = 224                 # tile edge in pixels
     WORKERS:        int   = 4                   # parallel tiling workers
     SEGMENT_THRESH: int   = 20                  # Otsu tissue-mask threshold
