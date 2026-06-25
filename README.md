@@ -18,6 +18,93 @@ ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image
 
 ---
 
+## Prerequisites
+
+### 1. Hugging Face Account & Access Token
+
+Virchow2 is a **gated model** — you need a Hugging Face account and a personal access token before the weights can be downloaded.
+
+#### Step 1: Create a Hugging Face Account
+1. Go to [huggingface.co](https://huggingface.co) and click **Sign Up**
+2. Verify your email address
+
+#### Step 2: Generate an Access Token
+1. Log in and click your **profile picture** (top right) → **Settings**
+2. In the left sidebar, select **Access Tokens**
+3. Click **New token**
+4. Give it a name (e.g. `virchow2-access`)
+5. Set the role to **Read** (sufficient for downloading model weights)
+6. Click **Generate a token**
+7. **Copy the token immediately** — it won't be shown again
+
+> ⚠️ Keep your token private. Never commit it to version control or share it publicly.
+
+#### Step 3: Request Access to Virchow2
+1. Go to the [Virchow2 model page](https://huggingface.co/paige-ai/Virchow2)
+2. Click **Request access** and fill in the form
+3. Access is typically granted within minutes
+4. You will receive a confirmation email when approved
+
+#### Step 4: Authenticate — choose one method
+
+---
+
+**Method A — CLI (recommended for servers & scripts)**
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+# Paste your token when prompted — input is hidden, this is expected
+```
+
+Verify authentication was successful:
+```bash
+huggingface-cli whoami
+# Should print your Hugging Face username
+```
+
+To make the token persist across sessions, export it in your shell profile:
+```bash
+echo 'export HF_TOKEN=hf_your_token_here' >> ~/.bashrc   # or ~/.zshrc
+source ~/.bashrc
+```
+
+---
+
+**Method B — JupyterLab notebook cell**
+
+Run this once at the top of your notebook before any model loading calls.
+Paste your token into `HF_ACCESS_TOKEN` — do **not** commit this cell with the token filled in.
+
+```python
+import os
+from huggingface_hub import whoami
+
+# ✏ Paste your HF access token here (Read role is sufficient)
+HF_ACCESS_TOKEN = "hf_your_token_here"
+
+# Verify the token is valid and print your username
+user = whoami(token=HF_ACCESS_TOKEN)
+print(f"Authenticated as: {user['name']}")
+
+# Expose the token to all HF libraries for the rest of the session
+os.environ["HF_TOKEN"] = HF_ACCESS_TOKEN
+print("HF_TOKEN environment variable set.")
+```
+
+Expected output:
+Authenticated as: your-hf-username
+
+HF_TOKEN environment variable set.
+
+---
+
+### 2. Mussel — WSI Tessellation Backend
+
+Stage 1 (Tessellation) depends on [Mussel](https://github.com/pathology-data-mining/Mussel), an open-source WSI tiling library. It is installed via pip directly from GitHub (see Installation step 3 below) and is already pinned in `VipsegD_requirements.txt`.
+
+
+
 ## Overview
 
 
