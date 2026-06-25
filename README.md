@@ -74,7 +74,7 @@ from run_vipsegd import run_vipsegd
 
 # Set the three required fields
 cfg.OUT_DIR    = "vipsegd_output"
-cfg.CHECKPOINT = "weights/phaseB_best.pt"
+cfg.CHECKPOINT = "TNBC_weights/TNBC_best.pt"
 cfg.DATA_PATH  = "histology/"
 
 # Run the full pipeline on one slide
