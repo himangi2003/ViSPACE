@@ -4,6 +4,9 @@ ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image
 
 ---
 
+![VipsegD workflow](ViP-SegD_workflow.png)
+
+
 ## Table of Contents
 0. [Prerequisites](#Prerequisites)
 1. [Overview](#overview)
@@ -147,11 +150,6 @@ class PipelineConfig:
 > does **not** need to be installed globally — pointing `MUSSEL_DIR` at the
 > downloaded folder is sufficient.
 
-#### Step 3: Verify the layout
-After cloning, confirm the expected Mussel entry point exists:
-```bash
-ls Mussel/mussel/cli/tessellate.py
-```
 --- 
 
 ## Overview

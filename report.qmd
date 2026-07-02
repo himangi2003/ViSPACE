@@ -1,0 +1,128 @@
+---
+title: "ViP-SegD Pathology Report"
+subtitle: "Whole-Slide Tissue Segmentation & Tumour Microenvironment Analysis"
+date: today
+date-format: "D MMMM YYYY"
+params:
+  slide_name: "SLIDE_NAME"
+  out_dir: "vipsegd_output"
+  institution: "Your Institution"
+  pathologist: ""
+  notes: ""
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    number-sections: true
+    self-contained: true
+    code-fold: true
+    code-summary: "Show code"
+    fig-align: center
+    fig-cap-location: bottom
+    css: report_style.css
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+```{python}
+#| tags: [parameters]
+slide_name  = params["slide_name"]
+out_dir     = params["out_dir"]
+institution = params["institution"]
+pathologist = params["pathologist"]
+notes       = params["notes"]
+```
+```{python}
+import warnings
+warnings.filterwarnings("ignore")
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec
+from IPython.display import Image as IPImage, display
+import json, textwrap, datetime
+# ── Paths ──────────────────────────────────────────────────────────────────
+root   = Path(out_dir) / slide_name
+tess   = root / "tessellation"
+seg    = root / "segmentation"
+sf     = root / "spatial_feature_results"
+roi_d  = sf / "tumor_roi_overlay"
+tsr_d  = sf / "cluster_tils_tsr_score"
+imm_d  = sf / "immune_proximity"
+nec_d  = sf / "necrosis_proximity"
+mor_d  = sf / "tumor_morphology"
+def load_csv(path, **kw):
+    p = Path(path)
+    return pd.read_csv(p, **kw) if p.exists() else pd.DataFrame()
+# Load all data
+manifest      = load_csv(seg / "manifest.csv")
+roi_boxes     = load_csv(roi_d / "tumor_roi_boxes.csv")
+tsr_cluster   = load_csv(tsr_d / "tils_tsr_by_cluster.csv")
+tsr_summary   = load_csv(tsr_d / "tils_tsr_wsi_summary.csv")
+imm_cluster   = load_csv(imm_d / "immune_proximity_by_cluster.csv")
+imm_summary   = load_csv(imm_d / "immune_proximity_wsi_summary.csv")
+nec_cluster   = load_csv(nec_d / "necrosis_proximity_by_cluster.csv")
+nec_summary   = load_csv(nec_d / "necrosis_proximity_wsi_summary.csv")
+mor_cluster   = load_csv(mor_d / "tumor_core_features_by_cluster.csv")
+mor_summary   = load_csv(mor_d / "tumor_core_wsi_summary.csv")
+# Colour palette matching segmenter.py COLORS_RGB
+CLASS_COLORS = {
+    "Tumour":        "#FF0000",
+    "Stroma":        "#00C800",
+    "Inflammatory":  "#0064FF",
+    "Necrosis":      "#FFA500",
+    "Others":        "#DC00DC",
+}
+def fmt_pct(v, decimals=1):
+    try: return f"{float(v):.{decimals}f}%"
+    except: return "—"
+def fmt_num(v, decimals=2):
+    try: return f"{float(v):.{decimals}f}"
+    except: return "—"
+def badge(text, color):
+    return f'<span class="badge" style="background:{color}">{text}</span>'
+def phenotype_color(ph):
+    ph = str(ph).lower()
+    palette = {
+        "penetrated":      "#2ecc71",
+        "peritumoral":     "#3498db",
+        "margin":          "#9b59b6",
+        "excluded":        "#e67e22",
+        "desert":          "#e74c3c",
+        "absent":          "#95a5a6",
+        "tumour-central":  "#e74c3c",
+        "peritumoural":    "#e67e22",
+        "immune-adjacent": "#9b59b6",
+        "stromal-distant": "#3498db",
+        "indeterminate":   "#bdc3c7",
+    }
+    for k, c in palette.items():
+        if k in ph:
+            return c
+    return "#bdc3c7"
+report_date = datetime.date.today().strftime("%-d %B %Y")
+n_tiles     = len(manifest)
+n_clusters  = int(tsr_cluster["cluster_id"].nunique()) if not tsr_cluster.empty else 0
+```
+::: {.callout-note appearance="minimal"}
+**Slide ID:** `{python} slide_name` &emsp; | &emsp;
+**Tumour clusters detected:** `{python} n_clusters` &emsp; | &emsp;
+**Tiles analysed:** `{python} f"{n_tiles:,}"` &emsp; | &emsp;
+**Institution:** `{python} institution`
+:::
+`{python} f'> *Pathologist:* {pathologist}' if pathologist else ''`
+`{python} f'> *Notes:* {notes}' if notes else ''`
+---
+# Tissue Segmentation
+```{python}
+seg_png = seg / f"{slide_name}_segmentation.png"
+thumb   = tess / "thumbnail.png"
+```
+```{python}
+#| fig-cap: "Left: H&E slide thumbnail. Right: Five-class tissue segmentation map."
+#| label: fig-segmentation
