@@ -3,8 +3,9 @@
 ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image (WSI) analysis. It combines the Virchow2 Vision Transformer encoder with a pixel-wise decoder to produce five-class tissue segmentation maps, then extracts rich spatial features from the tumour microenvironment (TME).
 
 ---
-
+![workflow](workflow2.png)
 ![VipsegD workflow](ViP-SegD_workflow.png)
+
 
 ---
 
