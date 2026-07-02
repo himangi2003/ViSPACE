@@ -100,7 +100,7 @@ print("HF_TOKEN environment variable set.")
 
 ---
 
-> **License note:** Virchow2 is released under the [Paige AI Research License](https://huggingface.co/paige-ai/Virchow2/blob/main/LICENSE). Review the terms before using ViP-SegD in commercial or clinical settings.
+> **License note:** Virchow2 is released under the [Paige AI Research License](https://huggingface.co/paige-ai/Virchow2). Review the terms before using ViP-SegD in commercial or clinical settings.
 
 ---
 
