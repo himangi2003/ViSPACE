@@ -6,6 +6,7 @@ ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image
 
 ![VipsegD workflow](ViP-SegD_workflow.png)
 
+---
 
 ## Table of Contents
 0. [Prerequisites](#Prerequisites)
