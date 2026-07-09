@@ -1,0 +1,73 @@
+# ViP-SegD — Google Colab requirements
+# =====================================
+# Pip-only equivalent of ViP-SegD_environment.yml's `pip:` section, for use
+# in a Colab notebook cell (Colab doesn't support conda environments the
+# way a local `conda env create` does).
+#
+# Excluded vs. ViP-SegD_environment.yml:
+#   - quarto            — conda-forge/system binary, not pip-installable.
+#                          Report generation (report/generate_report.py) needs
+#                          a separate install step — see note at the bottom.
+#   - python=3.11, pip   — conda-only bootstrap lines, not applicable here.
+#
+# Usage in a Colab cell:
+#   !pip install -q -r requirements-colab.txt
+#
+# ── Before you run this: check Colab's existing PyTorch/CUDA first ─────────
+# Colab ships with a PyTorch build already matched to its current runtime's
+# CUDA version, which changes over time and isn't always cu121. Installing
+# the pinned torch==2.5.1+cu121 below WILL replace Colab's preinstalled
+# torch — usually fine, but if you hit CUDA mismatch errors after install,
+# check what Colab actually gave you first:
+#   !nvidia-smi
+#   import torch; print(torch.__version__, torch.version.cuda)
+# and adjust the --extra-index-url / torch version pins below to match if
+# needed (see https://pytorch.org/get-started/locally/ for the right URL
+# per CUDA version).
+
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+# ── Virchow2 encoder ──────────────────────────────────────────────────────
+timm==1.0.17
+huggingface-hub[cli]==0.33.4
+safetensors==0.5.3
+transformers==4.53.2
+ml_dtypes
+open_clip_torch
+
+# ── Mussel (tessellation) ─────────────────────────────────────────────────
+git+https://github.com/pathology-data-mining/Mussel.git@5fed0ee6fea322f17ddf390a91e24e0615af8df2#egg=mussel
+omegaconf==2.3.0
+hydra-core==1.3.2
+h5py==3.14.0
+tiffslide==2.5.1
+tifffile==2025.5.10
+imagecodecs==2025.3.30
+einops==0.8.1
+openslide-python==1.4.1
+openslide-bin
+
+# ── Image processing (segmentation + stitching) ───────────────────────────
+opencv-python-headless==4.12.0.88
+pillow==11.3.0
+numpy==2.2.6
+scikit-image==0.25.2
+
+# ── Data handling ──────────────────────────────────────────────────────────
+pandas==2.3.1
+tqdm==4.67.1
+
+# ── Spatial / GeoJSON (TME feature extraction) ────────────────────────────
+geopandas==1.1.1
+shapely==2.1.1
+pyogrio==0.11.0
+pyproj==3.7.1
+scipy==1.16.0
+
+# ── Visualisation ───────────────────────────────────────────────────────────
+matplotlib==3.10.3
+seaborn==0.13.2
+
+
