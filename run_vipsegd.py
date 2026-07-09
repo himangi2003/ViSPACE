@@ -60,8 +60,8 @@ cfg.OUT_DIR/<slide_name>/
             tumor_core_wsi_summary.csv
             tumor_island_qc.csv   (when cfg.MORPHOLOGY_SAVE_ISLAND_QC = True)
 
-Usage
------
+Usage (as a library)
+---------------------
     from run_vipsegd import run_vipsegd
     from config import cfg
 
@@ -70,13 +70,42 @@ Usage
     # Re-run only failed / missing stages (completed stages are skipped):
     results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg)
 
-    # Force a specific stage to re-run even if output exists:
-    results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg,
-                          force_stages={"segmentation", "stitching"})
+    # Re-run only scoring stages (segmentation must already exist)
+    results = run_vipsegd(
+        "histology/slide.svs", cfg,
+        stages={"cluster_tils_tsr_score", "immune_proximity", "necrosis_proximity"},
+    )
 
-    # Run only a subset of stages (their prerequisites must already exist):
-    results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg,
-                          stages={"tumor_roi_overlay", "cluster_tils_tsr_score"})
+    # Force a specific stage to re-run even if output exists
+    results = run_vipsegd(
+        "histology/slide.svs", cfg,
+        force_stages={"tumor_roi_overlay"},
+    )
+
+    # Run a single stage via convenience function
+    from run_vipsegd import run_stage
+    result = run_stage("tumor_morphology", "histology/slide.svs", cfg, force=True)
+
+Usage (from the command line)
+------------------------------
+Same shared flags as the rest of the pipeline — every PipelineConfig field
+is available here too. Also supports --from-json to pick up a config saved
+earlier via `config.py --print-config`, plus --stages / --force-stages to
+mirror the stages= / force_stages= parameters above.
+
+    # run the full pipeline
+    python run_vipsegd.py --from-json run_config.json
+
+    # run only a subset of stages
+    python run_vipsegd.py --from-json run_config.json \\
+        --stages cluster_tils_tsr_score,immune_proximity,necrosis_proximity
+
+    # force specific stages to re-run even if output exists
+    python run_vipsegd.py --from-json run_config.json \\
+        --force-stages tumor_roi_overlay
+
+    # see every available flag
+    python run_vipsegd.py --help
 """
 
 from __future__ import annotations
@@ -93,7 +122,7 @@ from tessellate                  import run_tessellation
 from segmenter                   import run_segmentation
 from stitch                      import run_stitching
 from tumor_roi_overlay           import run_tumor_roi_overlay
-from cluster_tils_tsr_score      import run_cluster_tils_tsr_score
+from cluster_tils_tsr_scoring    import run_cluster_tils_tsr_score
 from immune_proximity_features   import run_immune_proximity_features
 from necrosis_proximity_features import run_necrosis_proximity_features
 from tumor_morphology_features   import run_tumor_morphology_features
@@ -340,3 +369,84 @@ def run_stage(
         stages       = {stage_name},
         force_stages = {stage_name} if force else None,
     )["stages"][stage_name]
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's field flags + --from-json, plus run_vipsegd.py-specific
+# --stages / --force-stages flags mirroring the stages= / force_stages=
+# parameters of run_vipsegd() above.
+
+def main(argv=None) -> None:
+    import argparse
+    from dataclasses import fields, replace
+    from config import add_config_fields_to_parser, config_from_json
+
+    parser = argparse.ArgumentParser(
+        prog="run_vipsegd.py",
+        description="Run the full ViP-SegD pipeline (or a subset of stages) "
+                     "for one WSI.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_config_fields_to_parser(parser)  # every PipelineConfig field
+
+    parser.add_argument(
+        "--from-json", type=str, default=None,
+        help="Load a PipelineConfig previously saved via "
+             "`config.py --print-config`. Any other --flag passed alongside "
+             "this one overrides the corresponding value from the JSON file.",
+    )
+    parser.add_argument(
+        "--stages", type=str, default=None, metavar="NAME,NAME,...",
+        help="Comma-separated list of stage names to run (default: all). "
+             f"Valid: {', '.join(ALL_STAGE_NAMES)}",
+    )
+    parser.add_argument(
+        "--force-stages", type=str, default=None, metavar="NAME,NAME,...",
+        help="Comma-separated list of stage names to force re-run even if "
+             "their output already exists on disk.",
+    )
+
+    args = parser.parse_args(argv)
+
+    # Build cfg — from JSON (with explicit-flag overrides layered on top)
+    # or from CLI flags alone, same semantics as config.config_from_args().
+    if args.from_json:
+        base_cfg = config_from_json(args.from_json)
+        defaults = PipelineConfig()
+        overrides = {
+            f.name: getattr(args, f.name)
+            for f in fields(PipelineConfig)
+            if getattr(args, f.name) != getattr(defaults, f.name)
+        }
+        cfg = replace(base_cfg, **overrides)
+    else:
+        overrides = {f.name: getattr(args, f.name) for f in fields(PipelineConfig)}
+        cfg = replace(PipelineConfig(), **overrides)
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        parser.error(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    stages       = set(s.strip() for s in args.stages.split(",")) if args.stages else None
+    force_stages = set(s.strip() for s in args.force_stages.split(",")) if args.force_stages else None
+
+    if stages:
+        unknown = stages - set(ALL_STAGE_NAMES)
+        if unknown:
+            parser.error(f"Unknown --stages value(s): {sorted(unknown)}. "
+                         f"Valid: {ALL_STAGE_NAMES}")
+    if force_stages:
+        unknown = force_stages - set(ALL_STAGE_NAMES)
+        if unknown:
+            parser.error(f"Unknown --force-stages value(s): {sorted(unknown)}. "
+                         f"Valid: {ALL_STAGE_NAMES}")
+
+    run_vipsegd(cfg.WSI_PATH, cfg, stages=stages, force_stages=force_stages)
+
+
+if __name__ == "__main__":
+    main()

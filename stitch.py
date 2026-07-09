@@ -25,8 +25,8 @@ Pipeline position
 -----------------
     tessellate.py  →  segmenter.py  →  stitch.py  →  (TME features)
 
-Usage
------
+Usage (as a library)
+---------------------
     from stitch import run_stitching
     from config import cfg
 
@@ -34,11 +34,48 @@ Usage
         wsi_path = "slides/TCGA-A1.svs",
         cfg      = cfg,
     )
-"""
 
+Usage (from the command line)
+------------------------------
+Same shared flags as config.py / tessellate.py / segmenter.py — every
+PipelineConfig field is available here too (--out-dir, --wsi-path, ...),
+plus this script also supports --from-json to pick up a config saved
+earlier via `config.py --print-config`.
+
+    # minimal — requires segmenter.py to have already run for this slide
+    python stitch.py --wsi-path slides/TCGA-A1-A0SP.svs --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python stitch.py --from-json run_config.json
+
+    # continue from a saved config but override one field
+    python stitch.py --from-json run_config.json --out-dir other_output
+
+    # override the tile step used when stitching (rare — auto-inference from
+    # manifest.csv is recommended and used by default) and tighten the
+    # minimum polygon area kept in the output GeoJSON
+    python stitch.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --out-dir vipsegd_output \\
+        --stitch-step-x 444 --stitch-step-y 444 \\
+        --min-area-px 200
+
+    # combine --from-json with stitch.py-specific flags
+    python stitch.py --from-json run_config.json --min-area-px 200
+
+    # see every available flag
+    python stitch.py --help
+
+Note: --stitch-step-x / --stitch-step-y are distinct from --step-x /
+--step-y (which only set cfg.STEP_X / cfg.STEP_Y — these are informational
+fields and are not currently read by any script in this pipeline, including
+this one). Leave --stitch-step-x/-y unset unless you need to force a
+specific tile spacing instead of auto-inferring it from manifest.csv.
+"""
 from __future__ import annotations
 
+import argparse
 import json
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -47,7 +84,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig
+from config import cfg as default_cfg, PipelineConfig, add_config_fields_to_parser, config_from_json
 from segmenter import (
     CLASS_NAMES,
     COLORS_BGR,
@@ -109,7 +146,6 @@ def _cleanup_npys(seg_dir: Path) -> int:
     """
     Remove ALL .npy files from seg_dir (tile *_seg.npy + stitched_seg.npy).
     Called automatically after both final outputs exist.
-
     Returns number of files removed.
     """
     npy_files = list(seg_dir.glob("*.npy"))
@@ -132,6 +168,7 @@ def _draw_legend_top_right(
 ) -> np.ndarray:
     """
     Draw a class legend on a BLACK strip added OUTSIDE (above) the image.
+
     Legend swatches are anchored to the top-right of the strip; the title
     (if given) sits at the top-left. Font and swatches are large enough
     to read clearly at typical WSI thumbnail resolutions.
@@ -176,7 +213,6 @@ def _draw_legend_top_right(
     for _, name, _ in rows:
         (tw, _), _ = cv2.getTextSize(name, font, fscale, thick)
         entry_widths.append(swatch + pad // 2 + tw)
-
     entries_total_w = (sum(entry_widths)
                        + cgap * max(0, len(entry_widths) - 1))
 
@@ -203,7 +239,6 @@ def _draw_legend_top_right(
     # ── Swatches anchored to TOP-RIGHT of the strip ─────────────────────────
     cx = W - pad - entries_total_w
     cy = (strip_h - swatch) // 2   # vertically centred within strip
-
     for (_, name, color), ew in zip(rows, entry_widths):
         # Coloured swatch
         cv2.rectangle(canvas,
@@ -215,7 +250,6 @@ def _draw_legend_top_right(
                       (cx,          cy),
                       (cx + swatch, cy + swatch),
                       (255, 255, 255), thickness=1)
-
         # Class name in white
         (_, th), _ = cv2.getTextSize(name, font, fscale, thick)
         text_x = cx + swatch + pad // 2
@@ -223,7 +257,6 @@ def _draw_legend_top_right(
         cv2.putText(canvas, name,
                     (text_x, text_y),
                     font, fscale, (255, 255, 255), thick, cv2.LINE_AA)
-
         cx += ew + cgap
 
     return canvas
@@ -435,6 +468,7 @@ def _extract_geojson(
             area = cv2.contourArea(cnt)
             if area < min_area_px:
                 continue
+
             # Canvas → WSI level-0 pixel coordinates
             ring = [
                 [float(x_min + pt[0][0]), float(y_min + pt[0][1])]
@@ -443,6 +477,7 @@ def _extract_geojson(
             if len(ring) < 3:
                 continue
             ring.append(ring[0])
+
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "Polygon", "coordinates": [ring]},
@@ -458,7 +493,6 @@ def _extract_geojson(
             })
 
         all_features.extend(features)
-
         if features:
             sz_approx = sum(len(str(f)) for f in features) / 1e6
             print(f"  {name:<20} {len(features):>5,} polygons  ~{sz_approx:.2f} MB")
@@ -468,6 +502,7 @@ def _extract_geojson(
     with open(str(combined_gj), "w") as fh:
         json.dump({"type": "FeatureCollection", "features": all_features},
                   fh, separators=(",", ":"))
+
     sz_all = combined_gj.stat().st_size / 1e6
     print(f"\n  Combined : {len(all_features):,} polygons  "
           f"{sz_all:.2f} MB  → {combined_gj.name}")
@@ -488,10 +523,10 @@ def run_stitching(
 ) -> dict:
     """
     Run stitching + GeoJSON extraction for one WSI.
+
     Continues the pipeline after run_segmentation().
 
     All paths are derived from wsi_path and cfg:
-
         slide_name   = Path(wsi_path).stem
         seg_dir      = cfg.OUT_DIR / slide_name / "segmentation"
         manifest_csv = seg_dir / "manifest.csv"
@@ -580,3 +615,119 @@ def run_stitching(
         "meta":         meta,
         "npys_removed": n_removed,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's add_config_fields_to_parser() for every PipelineConfig
+# field (--out-dir, --wsi-path, ...), plus a small set of stitch.py-specific
+# flags for arguments that aren't part of PipelineConfig (step_x/step_y
+# overrides, min_area_px), plus --from-json to pick up a config saved
+# earlier via `config.py --print-config`.
+#
+# stitch.py can't simply delegate to config.config_from_args() the way
+# tessellate.py / segmenter.py do, because it has its own extra flags
+# (--stitch-step-x/-y, --min-area-px) that aren't PipelineConfig fields.
+# Instead --from-json is added directly here, alongside those flags, using
+# the same "only override fields the user explicitly passed" logic as
+# config_from_args().
+
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="stitch.py",
+        description="Step 3 of the ViP-SegD pipeline — stitch per-tile "
+                     "segmentation into a WSI-level canvas + GeoJSON.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_config_fields_to_parser(parser)  # every PipelineConfig field
+
+    parser.add_argument(
+        "--from-json", type=str, default=None,
+        help="Load a PipelineConfig previously saved via "
+             "`config.py --print-config`. Any other --flag passed alongside "
+             "this one (including --stitch-step-x/-y, --min-area-px) "
+             "overrides the corresponding value from the JSON file.",
+    )
+
+    stitch_group = parser.add_argument_group("stitch.py-specific overrides")
+    stitch_group.add_argument(
+        "--stitch-step-x", type=int, default=None, metavar="PX",
+        help="Override the tile step in X (px) used when stitching. "
+             "Default: auto-infer from manifest.csv (recommended). Distinct "
+             "from --step-x, which only sets cfg.STEP_X (informational).",
+    )
+    stitch_group.add_argument(
+        "--stitch-step-y", type=int, default=None, metavar="PX",
+        help="Override the tile step in Y (px) used when stitching. "
+             "Default: auto-infer from manifest.csv (recommended). Distinct "
+             "from --step-y, which only sets cfg.STEP_Y (informational).",
+    )
+    stitch_group.add_argument(
+        "--min-area-px", type=int, default=100, metavar="PX2",
+        help="Minimum polygon area (px^2) to keep when extracting GeoJSON.",
+    )
+
+    args = parser.parse_args(argv)
+
+    # Build cfg — from JSON (with explicit-flag overrides layered on top)
+    # or from CLI flags alone, same semantics as config.config_from_args().
+    if args.from_json:
+        base_cfg = config_from_json(args.from_json)
+        defaults = PipelineConfig()
+        overrides = {
+            f.name: getattr(args, f.name)
+            for f in fields(PipelineConfig)
+            if getattr(args, f.name) != getattr(defaults, f.name)
+        }
+        cfg = replace(base_cfg, **overrides)
+    else:
+        overrides = {f.name: getattr(args, f.name) for f in fields(PipelineConfig)}
+        cfg = replace(PipelineConfig(), **overrides)
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        parser.error(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    manifest_csv = Path(cfg.OUT_DIR) / Path(cfg.WSI_PATH).stem / "segmentation" / "manifest.csv"
+    if not manifest_csv.exists():
+        parser.error(
+            f"manifest.csv not found: {manifest_csv}. "
+            f"Run segmenter.py for this slide (with the same --out-dir) first."
+        )
+
+    # --step-x / --step-y only set cfg.STEP_X / cfg.STEP_Y, which are
+    # informational fields that run_stitching() never reads — the actual
+    # stitching step is controlled by --stitch-step-x / --stitch-step-y
+    # (defaulting to None = auto-infer from manifest.csv). Someone passing
+    # --step-x expecting it to affect stitching would otherwise get no error
+    # and no effect, so warn explicitly instead of failing silently.
+    _defaults = PipelineConfig()
+    if cfg.STEP_X != _defaults.STEP_X and args.stitch_step_x is None:
+        print(
+            f"  WARNING: --step-x={cfg.STEP_X} was set, but stitch.py does not use "
+            f"cfg.STEP_X (it's informational only). Stitching will still "
+            f"auto-infer its step from manifest.csv. Use --stitch-step-x "
+            f"{cfg.STEP_X} instead if you meant to override the stitching step.",
+        )
+    if cfg.STEP_Y != _defaults.STEP_Y and args.stitch_step_y is None:
+        print(
+            f"  WARNING: --step-y={cfg.STEP_Y} was set, but stitch.py does not use "
+            f"cfg.STEP_Y (it's informational only). Stitching will still "
+            f"auto-infer its step from manifest.csv. Use --stitch-step-y "
+            f"{cfg.STEP_Y} instead if you meant to override the stitching step.",
+        )
+
+    run_stitching(
+        wsi_path    = cfg.WSI_PATH,
+        cfg         = cfg,
+        step_x      = args.stitch_step_x,
+        step_y      = args.stitch_step_y,
+        min_area_px = args.min_area_px,
+    )
+
+
+if __name__ == "__main__":
+    main()

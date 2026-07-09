@@ -1,3 +1,19 @@
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+# Ignore everything
+*
+
+# But keep gitignore itself
+!.gitignore
+
+# Keep the TNBC_weights folder and everything inside it
+!TNBC_weights/
+!TNBC_weights/**
+
+# Still ignore TIFF files anywhere, even inside kept folders
+*.tif
+*.tiff
+
+# Ignore Python cache
+__pycache__/

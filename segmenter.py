@@ -2,6 +2,7 @@
 segmenter.py
 ============
 Step 2 of the ViP-SegD pipeline.
+
 Model definition, checkpoint loading, and per-slide inference.
 
 Output directory
@@ -17,8 +18,8 @@ Contains
     load_model()     — load checkpoint from disk
     run_segmentation() — end-to-end inference for one WSI
 
-Usage
------
+Usage (as a library)
+---------------------
     from segmenter import run_segmentation
     from config import cfg
 
@@ -26,9 +27,45 @@ Usage
         wsi_path = "slides/TCGA-A1-A0SP.svs",
         cfg      = cfg,
     )
+
+Usage (from the command line)
+------------------------------
+Before running this step, authenticate with HuggingFace so Virchow2 can be
+downloaded (skip this if you set --virchow2-path to local weights instead):
+
+    pip install huggingface_hub
+    huggingface-cli login
+    # Paste your token when prompted — input is hidden, this is expected
+
+Then, same shared flags as config.py / tessellate.py — every PipelineConfig
+field is available here too, so --checkpoint, --device, --batch-size,
+--virchow2-path, --out-dir, etc. all work without learning new flag names.
+This script also supports --from-json, so it can pick up a config saved
+earlier via `config.py --print-config`.
+
+    # minimal — requires tessellate.py to have already run for this slide
+    python segmenter.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --checkpoint TNBC_weights/TNBC_best.pt
+
+    # explicit device / batch size / local Virchow2 weights
+    python segmenter.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --checkpoint TNBC_weights/TNBC_best.pt \\
+        --device cuda --batch-size 64 \\
+        --virchow2-path weights/virchow2 \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python segmenter.py --from-json run_config.json
+
+    # continue from a saved config but override one field
+    python segmenter.py --from-json run_config.json --batch-size 16
+
+    # see every available flag
+    python segmenter.py --help
 """
 
 import gc
+import os
 import warnings
 from pathlib import Path
 
@@ -39,6 +76,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from config import cfg as default_cfg, PipelineConfig
@@ -327,55 +365,121 @@ def _preprocess_tile(img_rgb: np.ndarray, device: str) -> torch.Tensor:
     return torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0).to(device)
 
 
-def _preprocess_batch(imgs_rgb: list[np.ndarray], device: str) -> torch.Tensor:
+class _TileDataset(Dataset):
     """
-    Normalise a list of (H, W, 3) uint8 RGB tiles → (B, 3, H, W) tensor.
-    All images must be the same spatial size.
+    FIX 2: Lazily loads + resizes tessellated tile PNGs.
+
+    Used with a DataLoader (num_workers > 0) so image I/O, decode, and
+    resize for the NEXT batch happen on CPU worker processes in parallel
+    with GPU inference on the CURRENT batch — instead of the GPU sitting
+    idle while Image.open()/resize() runs serially in the main loop.
+
+    __getitem__ returns a raw (H, W, 3) uint8 tensor plus the dataset
+    index, so the caller can recover the original tile_path and build
+    manifest rows after inference.
     """
-    tensors = []
-    for img in imgs_rgb:
-        x = img.astype(np.float32) / 255.0
-        x = (x - MEAN) / STD
-        tensors.append(torch.from_numpy(x).permute(2, 0, 1))
-    return torch.stack(tensors, dim=0).to(device)
+    def __init__(self, tile_paths: list, patch_sz: int = PATCH_SIZE):
+        self.tile_paths = tile_paths
+        self.patch_sz   = patch_sz
+
+    def __len__(self):
+        return len(self.tile_paths)
+
+    def __getitem__(self, idx: int):
+        img = np.array(Image.open(self.tile_paths[idx]).convert("RGB"))
+        if img.shape[:2] != (self.patch_sz, self.patch_sz):
+            img = np.array(
+                Image.fromarray(img).resize(
+                    (self.patch_sz, self.patch_sz), Image.LANCZOS))
+        return torch.from_numpy(img), idx  # uint8 (H, W, 3), original index
+
+
+def _best_autocast_dtype(device: str) -> torch.dtype:
+    """
+    FIX 1 (hardware-aware): pick the mixed-precision dtype that's actually
+    tensor-core-accelerated on the current GPU.
+
+    torch.cuda.is_bf16_supported() only reports whether bf16 ops can
+    *execute* — not whether they run on tensor cores. Native bf16 tensor
+    core support requires Ampere or newer (compute capability >= 8.0:
+    A100, RTX 30/40-series, H100). On Turing/Volta (compute capability
+    7.x — e.g. RTX 20-series, V100, T4), bf16 runs without hardware
+    acceleration and gives little to no speedup. Those GPUs do have fp16
+    tensor cores, so fp16 is the correct choice there instead.
+
+    Returns torch.float32 (i.e. autocast effectively disabled) on CPU.
+    """
+    if device != "cuda" or not torch.cuda.is_available():
+        return torch.float32
+    major, _ = torch.cuda.get_device_capability(0)
+    return torch.bfloat16 if major >= 8 else torch.float16
 
 
 @torch.no_grad()
-def _predict_batch(
-    model:    BCSSSegmenter,
-    imgs_rgb: list[np.ndarray],
-    device:   str,
-    patch_sz: int = PATCH_SIZE,
-) -> list[np.ndarray]:
+def _predict_batch_from_tensor(
+    model:        BCSSSegmenter,
+    batch_u8_cpu: torch.Tensor,
+    device:       str,
+    mean_t:       torch.Tensor,
+    std_t:        torch.Tensor,
+    autocast_dtype: torch.dtype = None,
+) -> list:
     """
-    Run model on a batch of tiles.
+    Run model on a pre-loaded, pre-resized batch of uint8 tiles.
 
     Parameters
     ----------
-    model    : BCSSSegmenter in eval mode
-    imgs_rgb : list of (H, W, 3) uint8 RGB arrays
-    device   : resolved device string
+    model        : BCSSSegmenter in eval mode
+    batch_u8_cpu : (B, H, W, 3) uint8 tensor, still on CPU (as produced by
+                   the DataLoader — see _TileDataset)
+    device       : resolved device string
+    mean_t, std_t: (1, 3, 1, 1) ImageNet mean/std tensors, pre-placed on
+                   `device` once outside the loop (avoids re-allocating a
+                   tiny tensor on every batch)
+    autocast_dtype: torch.bfloat16 / torch.float16 / torch.float32.
+                   Pass the result of _best_autocast_dtype(device), computed
+                   once outside the loop. If None, resolved here per-call
+                   (slightly less efficient but always correct).
+
+    FIX 1: the forward pass runs under torch.autocast using whichever
+    reduced-precision dtype is actually tensor-core-accelerated on this
+    GPU (see _best_autocast_dtype) — bf16 on Ampere+, fp16 on Turing/Volta.
+    This is usually the single biggest inference speedup on modern GPUs
+    (often 1.5-3x) for a frozen, already-trained encoder, with no
+    loss-scaling needed since this is inference-only (no backward pass).
+    Autocast keeps numerically sensitive ops (e.g. softmax/LayerNorm
+    reductions) in fp32 internally and only runs matmuls/convolutions in
+    the reduced dtype, so this is a throughput win with negligible
+    accuracy impact — not a precision trade-off you need to validate
+    against the checkpoint's original training precision.
+
+    Normalisation (uint8 -> float, mean/std) now happens on-GPU as a
+    broadcasted op instead of per-tile NumPy on CPU, which both reduces
+    CPU load (freeing it up for the DataLoader workers in FIX 2) and cuts
+    a host->device transfer of float32 data down to a smaller uint8 one.
 
     Returns
     -------
     List of (H, W) int32 class maps, one per input tile,
     with white background masked to SEG_IGNORE.
     """
-    resized = []
-    for img in imgs_rgb:
-        if img.shape[:2] != (patch_sz, patch_sz):
-            img = np.array(
-                Image.fromarray(img).resize((patch_sz, patch_sz), Image.LANCZOS))
-        resized.append(img)
+    if autocast_dtype is None:
+        autocast_dtype = _best_autocast_dtype(device)
 
-    batch_tensor = _preprocess_batch(resized, device)   # (B, 3, H, W)
-    logits = model(batch_tensor)                         # (B, C, H, W)
-    preds  = logits.argmax(dim=1).cpu().numpy()          # (B, H, W)
+    batch_u8_dev = batch_u8_cpu.to(device, non_blocking=True)   # (B, H, W, 3) uint8
+    x = batch_u8_dev.permute(0, 3, 1, 2).float() / 255.0        # (B, 3, H, W) float32
+    x = (x - mean_t) / std_t
 
+    use_amp = (device == "cuda" and autocast_dtype != torch.float32)
+    with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=use_amp):
+        logits = model(x)                                       # (B, C, H, W)
+    preds = logits.float().argmax(dim=1).cpu().numpy()           # (B, H, W)
+
+    imgs_np = batch_u8_cpu.numpy()  # original uint8 tiles, for white-bg masking
     results = []
-    for img, seg in zip(resized, preds):
-        seg = seg.astype(np.int32)
-        seg = mask_white_background(img, seg)
+    for i in range(imgs_np.shape[0]):
+        seg = preds[i].astype(np.int32)
+        seg = mask_white_background(imgs_np[i], seg)
         results.append(seg)
     return results
 
@@ -474,24 +578,45 @@ def run_segmentation(
         device     = device,
     )
 
+    # Pre-place normalisation constants on-device once, reused every batch
+    # inside _predict_batch_from_tensor (see FIX 1 docstring there).
+    mean_t = torch.tensor(MEAN, device=device).view(1, 3, 1, 1)
+    std_t  = torch.tensor(STD,  device=device).view(1, 3, 1, 1)
+
+    # FIX 1: pick bf16 (Ampere+) or fp16 (Turing/Volta) once, based on this
+    # GPU's actual tensor-core support — see _best_autocast_dtype docstring.
+    autocast_dtype = _best_autocast_dtype(device)
+    print(f"  AMP dtype  : {autocast_dtype}")
+
     manifest_rows = []
 
-    # FIX 4: Process tiles in batches of cfg.BATCH_SIZE rather than one at a
-    # time. For a 40× slide with 10k+ tiles this gives a substantial speedup
-    # (roughly cfg.BATCH_SIZE× throughput on GPU vs. the original batch-1 loop).
-    def _batched(seq, n):
-        """Yield successive n-sized chunks from seq."""
-        for i in range(0, len(seq), n):
-            yield seq[i : i + n]
+    # FIX 2: DataLoader with multiple workers overlaps tile I/O (disk read +
+    # decode + resize, all CPU-bound) for the NEXT batch with GPU inference
+    # on the CURRENT batch, instead of the GPU idling during file I/O.
+    # Reuses cfg.WORKERS (the same knob tessellate.py uses for Mussel tiling
+    # workers) so there's no new config field to learn.
+    num_workers = max(0, min(int(getattr(cfg, "WORKERS", 4)), os.cpu_count() or 4))
+    dataset = _TileDataset(tile_paths, patch_sz=PATCH_SIZE)
+    loader = DataLoader(
+        dataset,
+        batch_size  = batch_size,
+        shuffle     = False,
+        num_workers = num_workers,
+        pin_memory  = (device == "cuda"),
+        # drop_last=False (default): keep the final partial batch too —
+        # every tile must appear in the manifest.
+    )
 
     with tqdm(total=len(tile_paths), desc="Running segmentation", unit="tile") as pbar:
-        for batch_paths in _batched(tile_paths, batch_size):
-            imgs_rgb = [
-                np.array(Image.open(p).convert("RGB")) for p in batch_paths
-            ]
-            segs = _predict_batch(model, imgs_rgb, device)
+        for batch_u8_cpu, batch_idx in loader:
+            batch_paths = [tile_paths[i] for i in batch_idx.tolist()]
 
-            for tile_path, img_rgb, seg in zip(batch_paths, imgs_rgb, segs):
+            # FIX 1 (mixed precision) + FIX 2 (pre-loaded batch) applied here.
+            segs = _predict_batch_from_tensor(
+                model, batch_u8_cpu, device, mean_t, std_t, autocast_dtype
+            )
+
+            for tile_path, seg in zip(batch_paths, segs):
                 stem  = tile_path.stem
                 parts = stem.rsplit("_", 2)
                 try:
@@ -502,11 +627,31 @@ def run_segmentation(
                 npy_path = seg_dir / f"{stem}_seg.npy"
                 np.save(str(npy_path), seg)
 
+                # FIX 5: compute per-class pixel fractions for this tile
+                # (excluding SEG_IGNORE / white background from the
+                # denominator). Downstream spatial-analysis scripts —
+                # tumor_roi_overlay.py and cluster_tils_tsr_score.py —
+                # require frac_Tumour / frac_Stroma / frac_Inflammatory /
+                # frac_Necrosis / frac_Others columns in manifest.csv to
+                # filter and cluster tiles by tissue composition. Without
+                # this, downstream steps fail with:
+                #   "Manifest missing required columns: ['frac_Tumour', ...]"
+                valid_mask  = seg != SEG_IGNORE
+                valid_count = int(valid_mask.sum())
+                frac_cols = {
+                    f"frac_{name}": (
+                        float((seg == c).sum()) / valid_count
+                        if valid_count > 0 else 0.0
+                    )
+                    for c, name in enumerate(CLASS_NAMES)
+                }
+
                 manifest_rows.append({
                     "tile":     tile_path.name,
                     "wx":       wx,
                     "wy":       wy,
                     "npy_path": str(npy_path),
+                    **frac_cols,
                 })
 
             pbar.update(len(batch_paths))
@@ -520,3 +665,38 @@ def run_segmentation(
     print(f"  Done. {len(manifest_rows):,} tiles segmented → {seg_dir}")
 
     return str(manifest_csv)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) instead of hand-rolling a
+# second parser here. This means segmenter.py automatically gets every
+# PipelineConfig field flag AND --from-json support for free, so it can
+# pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python segmenter.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+    if not cfg.CHECKPOINT or not Path(cfg.CHECKPOINT).exists():
+        raise SystemExit(
+            f"--checkpoint not found: {cfg.CHECKPOINT!r}. "
+            f"Pass --checkpoint pointing at your ViP-SegD .pt file, "
+            f"either directly or via --from-json."
+        )
+
+    run_segmentation(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()

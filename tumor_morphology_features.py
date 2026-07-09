@@ -2,10 +2,10 @@
 """
 tumor_morphology_features.py
 ============================
-Spatial-analysis stage — tumour morphology feature extraction.
+Stage 8 of the ViP-SegD pipeline — tumour morphology feature extraction.
 
-Reads cluster polygons produced by run_cluster_tils_tsr_score() and the
-segmentation GeoJSON produced by run_stitching().
+Reads cluster polygons produced by run_cluster_tils_tsr_score() (stage 5)
+and the segmentation GeoJSON produced by run_stitching() (stage 3).
 
 Output directory
 ----------------
@@ -14,18 +14,49 @@ Output directory
         tumor_core_wsi_summary.csv
         tumor_island_qc.csv   (only when cfg.MORPHOLOGY_SAVE_ISLAND_QC = True)
 
-Usage
------
+Pipeline position
+-----------------
+    tessellate.py → segmenter.py → stitch.py → tumor_roi_overlay.py
+        → cluster_tils_tsr_score.py → immune_proximity_features.py
+        → necrosis_proximity_features.py → tumor_morphology_features.py
+
+Usage (as a library)
+---------------------
     from tumor_morphology_features import run_tumor_morphology_features
     from config import cfg
 
     run_tumor_morphology_features("slides/TCGA-A1-A0SP.svs", cfg)
+
+Usage (from the command line)
+------------------------------
+Same shared flags as the rest of the pipeline — every PipelineConfig field
+is available here too, including the MORPHOLOGY_* knobs. Also supports
+--from-json to pick up a config saved earlier via `config.py --print-config`.
+
+    # minimal — requires cluster_tils_tsr_score.py to have already run
+    python tumor_morphology_features.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python tumor_morphology_features.py --from-json run_config.json
+
+    # continue from a saved config but override one knob
+    python tumor_morphology_features.py --from-json run_config.json \\
+        --morphology-min-island-area-um2 500
+
+    # save per-island QC output alongside the standard outputs
+    python tumor_morphology_features.py --from-json run_config.json \\
+        --morphology-save-island-qc true
+
+    # see every available flag
+    python tumor_morphology_features.py --help
 """
 
 from __future__ import annotations
 
 import json
 import math
+import textwrap
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -577,6 +608,512 @@ def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.Dat
     return pd.DataFrame([out])
 
 
+
+
+# ---------------------------------------------------------------------------
+# User-facing overall tumour morphology analysis PNG
+# ---------------------------------------------------------------------------
+
+def fmt_metric(v: float, decimals: int = 2, suffix: str = "") -> str:
+    try:
+        if pd.isna(v):
+            return "—"
+        return f"{float(v):.{decimals}f}{suffix}"
+    except Exception:
+        return "—"
+
+
+def fmt_percent(v: float, decimals: int = 1) -> str:
+    try:
+        if pd.isna(v):
+            return "—"
+        return f"{float(v):.{decimals}f}%"
+    except Exception:
+        return "—"
+
+
+def row_get(row, key: str, default=np.nan):
+    try:
+        return row.get(key, default)
+    except Exception:
+        return default
+
+
+def classify_overall_tumor_morphology(wsi_row: pd.Series, cluster_df: pd.DataFrame) -> Tuple[str, str]:
+    """
+    Convert segmentation-derived morphology numbers into a short, transparent
+    user-facing interpretation. This is descriptive only, not diagnostic.
+    """
+    tumor_fraction = row_get(wsi_row, "wsi_tumor_fraction_of_cluster")
+    fragmentation = row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")
+    n_islands      = row_get(wsi_row, "wsi_tumor_n_islands")
+    solidity       = row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")
+    spread         = row_get(wsi_row, "wsi_area_weighted_tumor_spread_frac")
+
+    if pd.isna(tumor_fraction) or tumor_fraction <= 0:
+        return (
+            "Overall pattern: no measurable tumour morphology",
+            "No tumour-positive morphology features were detected in the analysed cluster regions."
+        )
+
+    descriptors = []
+
+    if pd.notna(fragmentation) and fragmentation >= 0.65:
+        descriptors.append("fragmented")
+    elif pd.notna(fragmentation) and fragmentation <= 0.40:
+        descriptors.append("cohesive")
+    else:
+        descriptors.append("moderately fragmented")
+
+    if pd.notna(spread) and spread >= 0.75:
+        descriptors.append("spatially dispersed")
+    elif pd.notna(spread) and spread <= 0.35:
+        descriptors.append("spatially localized")
+
+    if pd.notna(solidity) and solidity >= 0.70:
+        descriptors.append("solid")
+    elif pd.notna(solidity) and solidity < 0.60:
+        descriptors.append("irregular")
+
+    if pd.notna(tumor_fraction) and tumor_fraction >= 0.30:
+        descriptors.append("tumour-rich")
+    elif pd.notna(tumor_fraction) and tumor_fraction < 0.10:
+        descriptors.append("low tumour fraction")
+
+    headline = "Overall pattern: " + ", ".join(descriptors) + " tumour architecture"
+
+    dominant_sentence = ""
+    if not cluster_df.empty and "tumor_area_mm2" in cluster_df.columns:
+        positive = cluster_df[cluster_df["tumor_area_mm2"].fillna(0) > 0].copy()
+        if not positive.empty:
+            dom = positive.sort_values("tumor_area_mm2", ascending=False).iloc[0]
+            total_area = float(positive["tumor_area_mm2"].sum())
+            dom_area = row_get(dom, "tumor_area_mm2")
+            area_share = 100.0 * float(dom_area) / total_area if total_area > 0 else np.nan
+            dominant_sentence = (
+                f"Cluster {int(dom['cluster_id'])} is the dominant tumour-bearing region, "
+                f"contributing {fmt_percent(area_share)} of tumour area, with "
+                f"{fmt_metric(row_get(dom, 'tumor_n_islands'), 0)} tumour islands and "
+                f"fragmentation index {fmt_metric(row_get(dom, 'tumor_fragmentation_index'))}."
+            )
+
+    explanation = (
+        f"The slide contains {fmt_metric(n_islands, 0)} tumour islands across "
+        f"{fmt_metric(row_get(wsi_row, 'n_clusters_with_tumor'), 0)} tumour-positive clusters. "
+        f"The WSI fragmentation index is {fmt_metric(fragmentation)}, with solidity "
+        f"{fmt_metric(solidity)} and spread fraction {fmt_metric(spread)}. "
+        f"{dominant_sentence}"
+    )
+
+    return headline, explanation
+
+
+def make_tumor_morphology_interpretation_bullets(wsi_row: pd.Series, cluster_df: pd.DataFrame) -> str:
+    frag = row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")
+    tumor_fraction = row_get(wsi_row, "wsi_tumor_fraction_of_cluster")
+    n_islands = row_get(wsi_row, "wsi_tumor_n_islands")
+    solidity = row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")
+    spread = row_get(wsi_row, "wsi_area_weighted_tumor_spread_frac")
+
+    bullets = []
+
+    if pd.notna(frag) and frag >= 0.65:
+        bullets.append("• High fragmentation: tumour is distributed across many separated islands.")
+    elif pd.notna(frag) and frag <= 0.40:
+        bullets.append("• Low fragmentation: tumour architecture appears comparatively cohesive.")
+    else:
+        bullets.append("• Intermediate fragmentation: tumour shows partial separation into islands.")
+
+    if pd.notna(tumor_fraction) and tumor_fraction >= 0.30:
+        bullets.append("• Tumour-rich analysed region: tumour occupies a substantial fraction of cluster area.")
+    elif pd.notna(tumor_fraction) and tumor_fraction < 0.10:
+        bullets.append("• Low tumour fraction: tumour occupies a small fraction of cluster area.")
+    else:
+        bullets.append("• Moderate tumour fraction within analysed tumour clusters.")
+
+    if pd.notna(spread) and spread >= 0.75:
+        bullets.append("• High spread fraction: tumour islands are spatially dispersed across the cluster envelope.")
+    else:
+        bullets.append("• Lower spread fraction: tumour islands are more spatially localized.")
+
+    if pd.notna(solidity) and solidity < 0.60:
+        bullets.append("• Lower solidity suggests irregular or less filled tumour island shapes.")
+    else:
+        bullets.append("• Solidity is moderate to high, suggesting more filled tumour island shapes.")
+
+    if not cluster_df.empty and "tumor_area_mm2" in cluster_df.columns:
+        positive = cluster_df[cluster_df["tumor_area_mm2"].fillna(0) > 0].copy()
+        if not positive.empty:
+            dom = positive.sort_values("tumor_area_mm2", ascending=False).iloc[0]
+            total_area = float(positive["tumor_area_mm2"].sum())
+            share = 100.0 * float(dom["tumor_area_mm2"]) / total_area if total_area > 0 else np.nan
+            bullets.append(f"• Cluster {int(dom['cluster_id'])} dominates tumour burden with {fmt_percent(share)} of tumour area.")
+
+    bullets.append(f"• Total tumour islands detected: {fmt_metric(n_islands, 0)}.")
+    return "\n".join(bullets)
+
+
+def draw_metric_card(ax, title: str, value: str, subtitle: str = "") -> None:
+    ax.axis("off")
+    card = plt.Rectangle(
+        (0, 0), 1, 1,
+        transform=ax.transAxes,
+        facecolor="white",
+        edgecolor="#d9dee7",
+        linewidth=1.2,
+    )
+    ax.add_patch(card)
+    ax.text(0.06, 0.72, title, transform=ax.transAxes, fontsize=10,
+            color="#5b6678", weight="bold", va="center")
+    ax.text(0.06, 0.42, value, transform=ax.transAxes, fontsize=18,
+            color="#111827", weight="bold", va="center")
+    if subtitle:
+        ax.text(0.06, 0.18, subtitle, transform=ax.transAxes, fontsize=8.5,
+                color="#6b7280", va="center")
+
+
+def add_bar_labels(ax, values, decimals: int = 2) -> None:
+    if len(values) == 0:
+        return
+    ymax = max(float(np.nanmax(values)), 1e-12)
+    offset = ymax * 0.03
+    for i, v in enumerate(values):
+        if pd.isna(v):
+            continue
+        ax.text(i, float(v) + offset, f"{float(v):.{decimals}f}",
+                ha="center", va="bottom", fontsize=8)
+
+
+def generate_tumor_morphology_analysis_png(
+    core_features: pd.DataFrame,
+    wsi_summary: pd.DataFrame,
+    out_png: Path,
+    slide_name: Optional[str] = None,
+) -> Optional[Path]:
+    """
+    Generate one user-facing PNG panel summarizing overall tumour morphology.
+
+    The PNG is intended for reports and dashboards. It is produced directly
+    by this morphology stage so the Quarto report can simply display it later.
+    """
+    if core_features is None or core_features.empty:
+        print("  Skipped morphology analysis PNG: no cluster-level morphology features.")
+        return None
+    if wsi_summary is None or wsi_summary.empty:
+        print("  Skipped morphology analysis PNG: no WSI morphology summary.")
+        return None
+
+    required = [
+        "cluster_id", "tumor_area_mm2", "tumor_fraction_of_cluster",
+        "tumor_n_islands", "tumor_fragmentation_index",
+    ]
+    missing = [c for c in required if c not in core_features.columns]
+    if missing:
+        print(f"  Skipped morphology analysis PNG: missing columns {missing}")
+        return None
+
+    # Local import keeps the extraction stage usable in minimal environments.
+    global plt
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+
+    plot_df = core_features.copy()
+    plot_df = plot_df[plot_df["tumor_area_mm2"].fillna(0) > 0].copy()
+    if plot_df.empty:
+        print("  Skipped morphology analysis PNG: no tumour-positive clusters.")
+        return None
+
+    plot_df = plot_df.sort_values("tumor_area_mm2", ascending=False)
+    plot_df["cluster_label"] = plot_df["cluster_id"].apply(lambda x: f"C{int(x)}")
+
+    wsi_row = wsi_summary.iloc[0]
+    headline, explanation = classify_overall_tumor_morphology(wsi_row, plot_df)
+    bullets = make_tumor_morphology_interpretation_bullets(wsi_row, plot_df)
+
+    fig = plt.figure(figsize=(18, 12), dpi=180)
+    fig.patch.set_facecolor("white")
+
+    gs = GridSpec(
+        5, 4,
+        figure=fig,
+        height_ratios=[0.9, 1.05, 1.05, 1.75, 1.15],
+        hspace=0.68,
+        wspace=0.38,
+    )
+
+    ax_header = fig.add_subplot(gs[0, :])
+    ax_header.axis("off")
+    title = "Tumour Morphology Overall Analysis"
+    if slide_name:
+        title += f" · {slide_name}"
+
+    ax_header.text(0, 0.92, title, fontsize=24, weight="bold", color="#111827", va="top")
+    ax_header.text(0, 0.54, headline, fontsize=16, weight="bold", color="#374151", va="top")
+    ax_header.text(0, 0.04, textwrap.fill(explanation, width=165), fontsize=10.5,
+                   color="#4b5563", va="bottom")
+
+    metrics = [
+        ("Tumour area", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_area_mm2'))} mm²", "Total segmented tumour area"),
+        ("Tumour fraction", fmt_percent(row_get(wsi_row, "wsi_tumor_fraction_of_cluster") * 100), "Fraction of analysed cluster area"),
+        ("Tumour islands", fmt_metric(row_get(wsi_row, "wsi_tumor_n_islands"), 0), "Separated tumour components"),
+        ("Fragmentation index", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")), "Higher means more fragmented"),
+        ("Solidity", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")), "Higher means more filled/solid"),
+        ("Spread fraction", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_spread_frac")), "Spatial distribution of islands"),
+        ("Patch density", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_patch_density_per_mm2'))}/mm²", "Tumour patches per area"),
+        ("Median island distance", f"{fmt_metric(row_get(wsi_row, 'wsi_area_weighted_tumor_island_nnd_median_um'))} µm", "Nearest-neighbour distance"),
+    ]
+
+    for i, metric in enumerate(metrics):
+        r = 1 + i // 4
+        c = i % 4
+        draw_metric_card(fig.add_subplot(gs[r, c]), metric[0], metric[1], metric[2])
+
+    # Cluster bar charts
+    area_vals = plot_df["tumor_area_mm2"].astype(float).to_numpy()
+    frac_vals = plot_df["tumor_fraction_of_cluster"].astype(float).to_numpy() * 100.0
+    island_vals = plot_df["tumor_n_islands"].astype(float).to_numpy()
+    frag_vals = plot_df["tumor_fragmentation_index"].astype(float).to_numpy()
+    labels = plot_df["cluster_label"].tolist()
+
+    chart_specs = [
+        ("Tumour area by cluster", "Area (mm²)", area_vals, 2),
+        ("Tumour fraction by cluster", "Fraction (%)", frac_vals, 1),
+        ("Tumour islands by cluster", "Island count", island_vals, 0),
+        ("Fragmentation by cluster", "Fragmentation index", frag_vals, 2),
+    ]
+
+    for idx, (title, ylabel, vals, decimals) in enumerate(chart_specs):
+        ax = fig.add_subplot(gs[3, idx])
+        ax.bar(labels, vals)
+        add_bar_labels(ax, vals, decimals=decimals)
+        ax.set_title(title, fontsize=12, weight="bold")
+        ax.set_ylabel(ylabel)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", alpha=0.25)
+        if "Fragmentation" in title:
+            ax.set_ylim(0, max(1.0, float(np.nanmax(vals)) * 1.2))
+
+    # Bubble plot: islands vs fragmentation, size by tumour area.
+    ax_bubble = fig.add_subplot(gs[4, 0:2])
+    sizes = plot_df["tumor_area_mm2"].astype(float).to_numpy()
+    size_scaled = 250 + 1800 * sizes / max(float(np.nanmax(sizes)), 1e-12)
+    ax_bubble.scatter(
+        plot_df["tumor_n_islands"],
+        plot_df["tumor_fragmentation_index"],
+        s=size_scaled,
+        alpha=0.65,
+        edgecolors="#111827",
+        linewidths=0.8,
+    )
+    for _, row in plot_df.iterrows():
+        ax_bubble.text(
+            row["tumor_n_islands"],
+            row["tumor_fragmentation_index"],
+            f"C{int(row['cluster_id'])}",
+            fontsize=9,
+            ha="center",
+            va="center",
+            weight="bold",
+        )
+    ax_bubble.set_title("Fragmentation landscape", fontsize=12, weight="bold")
+    ax_bubble.set_xlabel("Number of tumour islands")
+    ax_bubble.set_ylabel("Fragmentation index")
+    ax_bubble.spines[["top", "right"]].set_visible(False)
+    ax_bubble.grid(alpha=0.25)
+
+    ax_note = fig.add_subplot(gs[4, 2:])
+    ax_note.axis("off")
+    ax_note.text(0, 0.98, "Interpretation notes", fontsize=13, weight="bold",
+                 color="#111827", va="top")
+    ax_note.text(0, 0.78, bullets, fontsize=10.5, color="#374151", va="top", linespacing=1.5)
+    ax_note.text(
+        0, 0.05,
+        "Note: Computational morphology summary from segmentation-derived features; not a standalone diagnosis.",
+        fontsize=8.5,
+        color="#6b7280",
+        va="bottom",
+    )
+
+    fig.savefig(out_png, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Wrote: {out_png.name}")
+    return out_png
+
+
+def save_tumor_morphology_plots(
+    core_features: pd.DataFrame,
+    out_dir: Path,
+) -> Dict[str, Optional[str]]:
+    """
+    Save separate tumour morphology visualization PNGs.
+
+    These are intentionally plot-only outputs. Any text interpretation,
+    cards, or explanatory report layout can be added later in the QMD.
+
+    Writes, when the required columns are available:
+        tumor_area_by_cluster.png
+        tumor_fraction_by_cluster.png
+        tumor_islands_by_cluster.png
+        tumor_fragmentation_by_cluster.png
+        tumor_fragmentation_landscape.png
+    """
+    plot_paths: Dict[str, Optional[str]] = {
+        "tumor_area_by_cluster_png": None,
+        "tumor_fraction_by_cluster_png": None,
+        "tumor_islands_by_cluster_png": None,
+        "tumor_fragmentation_by_cluster_png": None,
+        "tumor_fragmentation_landscape_png": None,
+    }
+
+    if core_features is None or core_features.empty:
+        print("  Skipped morphology plots: no cluster-level morphology features.")
+        return plot_paths
+
+    required = ["cluster_id", "tumor_area_mm2"]
+    missing = [c for c in required if c not in core_features.columns]
+    if missing:
+        print(f"  Skipped morphology plots: missing columns {missing}")
+        return plot_paths
+
+    # Local import keeps the extraction stage usable in minimal environments.
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    plot_df = core_features.copy()
+    plot_df = plot_df[plot_df["tumor_area_mm2"].fillna(0) > 0].copy()
+
+    if plot_df.empty:
+        print("  Skipped morphology plots: no tumour-positive clusters.")
+        return plot_paths
+
+    plot_df = plot_df.sort_values("tumor_area_mm2", ascending=False)
+    plot_df["cluster_label"] = plot_df["cluster_id"].apply(lambda x: f"C{int(x)}")
+
+    def _save_bar(column: str, ylabel: str, title: str, filename: str, decimals: int = 2, scale: float = 1.0):
+        if column not in plot_df.columns:
+            print(f"  Skipped {filename}: missing column {column}")
+            return None
+
+        vals = plot_df[column].astype(float).to_numpy() * scale
+        labels = plot_df["cluster_label"].tolist()
+
+        fig, ax = plt.subplots(figsize=(8.5, 5.2), dpi=180)
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
+
+        ax.bar(labels, vals)
+        ax.set_title(title, fontsize=14, weight="bold")
+        ax.set_xlabel("Tumour cluster")
+        ax.set_ylabel(ylabel)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", alpha=0.25)
+
+        ymax = max(float(np.nanmax(vals)), 1e-12)
+        offset = ymax * 0.03
+        for i, v in enumerate(vals):
+            if pd.isna(v):
+                continue
+            ax.text(i, float(v) + offset, f"{float(v):.{decimals}f}", ha="center", va="bottom", fontsize=9)
+
+        if "Fragmentation" in title:
+            ax.set_ylim(0, max(1.0, ymax * 1.2))
+        else:
+            ax.set_ylim(0, ymax * 1.18)
+
+        fig.tight_layout()
+        out_path = out_dir / filename
+        fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        print(f"  Wrote: {out_path.name}")
+        return str(out_path)
+
+    plot_paths["tumor_area_by_cluster_png"] = _save_bar(
+        column="tumor_area_mm2",
+        ylabel="Tumour area (mm²)",
+        title="Tumour area by cluster",
+        filename="tumor_area_by_cluster.png",
+        decimals=2,
+    )
+
+    plot_paths["tumor_fraction_by_cluster_png"] = _save_bar(
+        column="tumor_fraction_of_cluster",
+        ylabel="Tumour fraction (%)",
+        title="Tumour fraction by cluster",
+        filename="tumor_fraction_by_cluster.png",
+        decimals=1,
+        scale=100.0,
+    )
+
+    plot_paths["tumor_islands_by_cluster_png"] = _save_bar(
+        column="tumor_n_islands",
+        ylabel="Tumour island count",
+        title="Tumour islands by cluster",
+        filename="tumor_islands_by_cluster.png",
+        decimals=0,
+    )
+
+    plot_paths["tumor_fragmentation_by_cluster_png"] = _save_bar(
+        column="tumor_fragmentation_index",
+        ylabel="Fragmentation index",
+        title="Fragmentation by cluster",
+        filename="tumor_fragmentation_by_cluster.png",
+        decimals=2,
+    )
+
+    landscape_required = ["tumor_n_islands", "tumor_fragmentation_index", "tumor_area_mm2"]
+    missing_landscape = [c for c in landscape_required if c not in plot_df.columns]
+    if missing_landscape:
+        print(f"  Skipped tumor_fragmentation_landscape.png: missing columns {missing_landscape}")
+        return plot_paths
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.6), dpi=180)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    sizes = plot_df["tumor_area_mm2"].astype(float).to_numpy()
+    size_scaled = 220 + 1500 * sizes / max(float(np.nanmax(sizes)), 1e-12)
+
+    ax.scatter(
+        plot_df["tumor_n_islands"],
+        plot_df["tumor_fragmentation_index"],
+        s=size_scaled,
+        alpha=0.65,
+        edgecolors="black",
+        linewidths=0.8,
+    )
+
+    for _, row in plot_df.iterrows():
+        ax.text(
+            row["tumor_n_islands"],
+            row["tumor_fragmentation_index"],
+            f"C{int(row['cluster_id'])}",
+            fontsize=9,
+            ha="center",
+            va="center",
+            weight="bold",
+        )
+
+    ax.set_title("Fragmentation landscape", fontsize=14, weight="bold")
+    ax.set_xlabel("Number of tumour islands")
+    ax.set_ylabel("Fragmentation index")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(alpha=0.25)
+
+    fig.tight_layout()
+    out_path = out_dir / "tumor_fragmentation_landscape.png"
+    fig.savefig(out_path, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    plot_paths["tumor_fragmentation_landscape_png"] = str(out_path)
+    print(f"  Wrote: {out_path.name}")
+
+    return plot_paths
+
+
 # ---------------------------------------------------------------------------
 # Top-level callable
 # ---------------------------------------------------------------------------
@@ -601,6 +1138,11 @@ def run_tumor_morphology_features(
         tumor_core_features_by_cluster.csv
         tumor_core_wsi_summary.csv
         tumor_island_qc.csv   (only when cfg.MORPHOLOGY_SAVE_ISLAND_QC = True)
+        tumor_area_by_cluster.png
+        tumor_fraction_by_cluster.png
+        tumor_islands_by_cluster.png
+        tumor_fragmentation_by_cluster.png
+        tumor_fragmentation_landscape.png
 
     Parameters
     ----------
@@ -615,7 +1157,7 @@ def run_tumor_morphology_features(
     Returns
     -------
     dict : slide_name, cluster_geojson, segmentation_geojson,
-           core_csv, summary_csv, island_qc_csv (or None)
+           core_csv, summary_csv, island_qc_csv (or None), plot PNG paths
     """
     if cfg is None:
         cfg = default_cfg
@@ -676,6 +1218,11 @@ def run_tumor_morphology_features(
     print(f"  Wrote: {core_csv.name}")
     print(f"  Wrote: {summary_csv.name}")
 
+    morphology_plots = save_tumor_morphology_plots(
+        core_features=core,
+        out_dir=out_dir,
+    )
+
     island_qc_csv = None
     if save_island_qc and not islands.empty:
         island_qc_csv = out_dir / "tumor_island_qc.csv"
@@ -705,4 +1252,53 @@ def run_tumor_morphology_features(
         "core_csv":             str(core_csv),
         "summary_csv":          str(summary_csv),
         "island_qc_csv":        str(island_qc_csv) if island_qc_csv else None,
+        **morphology_plots,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) — every PipelineConfig
+# field (including the MORPHOLOGY_* knobs) is available as a flag, plus
+# --from-json to pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python tumor_morphology_features.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    slide_name = Path(cfg.WSI_PATH).stem
+    cluster_geojson = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "spatial_feature_results" / "cluster_tils_tsr_score" / "cluster_scoring_polygons.geojson"
+    )
+    seg_geojson = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "segmentation" / "segmentation_all_classes.geojson"
+    )
+    if not cluster_geojson.exists():
+        raise SystemExit(
+            f"Cluster GeoJSON not found: {cluster_geojson}. "
+            f"Run cluster_tils_tsr_score.py for this slide (with the same --out-dir) first."
+        )
+    if not seg_geojson.exists():
+        raise SystemExit(
+            f"Segmentation GeoJSON not found: {seg_geojson}. "
+            f"Run stitch.py for this slide (with the same --out-dir) first."
+        )
+
+    run_tumor_morphology_features(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,9 @@
 tessellate.py
 =============
 Step 1 of the ViP-SegD pipeline.
+
 Runs Mussel tiling on one WSI using settings from config.py.
+
 Output directory
 ----------------
     cfg.OUT_DIR/<slide_name>/tessellation/
@@ -11,18 +13,50 @@ Output directory
         grid_mask.png
         thumbnail.png
         <slide>.h5
-Usage
------
+
+Usage (as a library)
+---------------------
     from tessellate import run_tessellation
     from config import cfg
     outdir = run_tessellation(
         wsi_path = "slides/TCGA-A1-A0SP.svs",
         cfg      = cfg,
     )
+
+Usage (from the command line)
+------------------------------
+tessellate.py shares its CLI with config.py — every PipelineConfig field
+(including MUSSEL_DIR, PATCH_SIZE, WORKERS, SEGMENT_THRESH, THUMBNAIL_SIZE,
+OUT_DIR, WSI_PATH, ...) is available as a flag, so you don't need to learn a
+second set of arguments for this step. It also supports --from-json, so you
+can pick up a config saved earlier via `config.py --print-config`.
+
+    # minimal
+    python tessellate.py --wsi-path slides/TCGA-A1-A0SP.svs
+
+    # pointing at a non-default Mussel checkout, custom patch size / workers
+    python tessellate.py \\
+        --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --mussel-dir /opt/Mussel \\
+        --patch-size 224 \\
+        --workers 8 \\
+        --segment-thresh 20 \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python tessellate.py --from-json run_config.json
+
+    # continue from a saved config but override one field
+    python tessellate.py --from-json run_config.json --patch-size 256
+
+    # see every available flag
+    python tessellate.py --help
 """
 import sys
 from pathlib import Path
+
 from omegaconf import OmegaConf
+
 from config import cfg as default_cfg, PipelineConfig
 
 
@@ -54,7 +88,8 @@ def run_tessellation(
     if not mussel_dir.exists():
         raise FileNotFoundError(
             f"Mussel not found at '{cfg.MUSSEL_DIR}'. "
-            f"Clone the Mussel repository and set MUSSEL_DIR in config.py to its root path.\n"
+            f"Clone the Mussel repository and set MUSSEL_DIR in config.py (or pass "
+            f"--mussel-dir on the command line) to its root path.\n"
             f"  git clone https://github.com/pathology-data-mining/Mussel {cfg.MUSSEL_DIR}"
         )
 
@@ -70,11 +105,13 @@ def run_tessellation(
     slide_name = wsi.stem
     outdir     = Path(cfg.OUT_DIR) / slide_name / "tessellation"
     outdir.mkdir(parents=True, exist_ok=True)
+
     output_h5_path = outdir / f"{slide_name}.h5"
 
     print(f"\n{'='*55}")
     print(f"  Tessellation")
     print(f"  Slide      : {wsi.name}")
+    print(f"  Mussel dir : {cfg.MUSSEL_DIR}")
     print(f"  Patch size : {cfg.PATCH_SIZE}")
     print(f"  Workers    : {cfg.WORKERS}")
     print(f"  Output     : {outdir}")
@@ -85,6 +122,7 @@ def run_tessellation(
         use_otsu          = True,
         segment_threshold = cfg.SEGMENT_THRESH,
     )
+
     tess_config = TessellateConfig(
         slide_path            = str(wsi),
         output_h5_path        = str(output_h5_path),
@@ -114,3 +152,32 @@ def run_tessellation(
             f"Tessellation failed for {wsi_path}\n"
             f"Expected H5 at: {output_h5_path}"
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) instead of hand-rolling a
+# second parser here. This means tessellate.py automatically gets every
+# PipelineConfig field flag AND --from-json support for free, so it can
+# pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python tessellate.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    run_tessellation(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,7 @@
 """
 tumor_roi_overlay.py
 ====================
-Step 1 of the ViP-SegD spatial-analysis stage.
+Step 5 of the ViP-SegD pipeline (Step 1 of the spatial-analysis stage).
 
 Clusters tumor tiles into spatially-connected clumps, builds non-overlapping
 ROI boxes of a chosen physical size, and renders overlay visualisations.
@@ -21,20 +21,47 @@ Inputs (all inferred from wsi_path + cfg)
   manifest : cfg.OUT_DIR/<slide>/segmentation/manifest.csv
              Must contain: wx, wy, frac_Tumour, frac_Stroma,
              frac_Inflammatory, frac_Necrosis, frac_Others
+             Written by run_segmentation() (step 2 / segmenter.py).
 
 Outputs
 -------
   cfg.OUT_DIR/<slide>/spatial_feature_results/tumor_roi_overlay/
       tumor_roi_boxes.csv
       tumor_roi_boxes_pseudo_thumbnail.png
-      tumor_roi_boxes_wsi_thumbnail.png   (only when wsi_path exists on disk)
+      tumor_roi_boxes_wsi_thumbnail.png   (only when wsi_path exists on disk;
+                                            requires openslide-python)
 
-Usage
------
+Pipeline position
+-----------------
+    tessellate.py  →  segmenter.py  →  stitch.py  →  tumor_roi_overlay.py  →  cluster_tils_tsr_score.py
+
+Usage (as a library)
+---------------------
     from tumor_roi_overlay import run_tumor_roi_overlay
     from config import cfg
 
     run_tumor_roi_overlay("slides/TCGA-A1-A0SP.svs", cfg)
+
+Usage (from the command line)
+------------------------------
+Same shared flags as config.py / tessellate.py / segmenter.py / stitch.py —
+every PipelineConfig field is available here too, including the ROI_* knobs
+(--roi-size-um, --roi-min-tumor-frac, --roi-max-necrosis, etc.). Also
+supports --from-json to pick up a config saved earlier via
+`config.py --print-config`.
+
+    # minimal — requires stitch.py to have already run for this slide
+    python tumor_roi_overlay.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python tumor_roi_overlay.py --from-json run_config.json
+
+    # continue from a saved config but override one ROI knob
+    python tumor_roi_overlay.py --from-json run_config.json --roi-size-um 150
+
+    # see every available flag
+    python tumor_roi_overlay.py --help
 """
 
 from __future__ import annotations
@@ -772,3 +799,38 @@ def run_tumor_roi_overlay(
         "n_boxes":     len(rois),
         "n_clusters":  int(rois["cluster_id"].nunique()) if not rois.empty else 0,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) — every PipelineConfig
+# field (including the ROI_* knobs) is available as a flag, plus
+# --from-json to pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python tumor_roi_overlay.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    manifest_csv = Path(cfg.OUT_DIR) / Path(cfg.WSI_PATH).stem / "segmentation" / "manifest.csv"
+    if not manifest_csv.exists():
+        raise SystemExit(
+            f"manifest.csv not found: {manifest_csv}. "
+            f"Run segmenter.py for this slide (with the same --out-dir) first."
+        )
+
+    run_tumor_roi_overlay(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()

@@ -2,7 +2,7 @@
 """
 cluster_tils_tsr_score.py
 =========================
-Step 2 of the ViP-SegD spatial-analysis stage.
+Step 6 of the ViP-SegD pipeline (Step 2 of the spatial-analysis stage).
 
 Builds non-overlapping cluster scoring polygons from the ROI boxes produced
 by run_tumor_roi_overlay(), then computes TSR and sTILs from the segmentation
@@ -31,8 +31,10 @@ Inputs (all inferred from wsi_path + cfg)
 -----------------------------------------
   roi_boxes_csv : cfg.OUT_DIR/<slide>/spatial_feature_results/
                       tumor_roi_overlay/tumor_roi_boxes.csv
+                  Written by run_tumor_roi_overlay() (step 5).
   geojson       : cfg.OUT_DIR/<slide>/segmentation/
                       segmentation_all_classes.geojson
+                  Written by run_stitching() (step 4).
 
 Outputs
 -------
@@ -42,12 +44,37 @@ Outputs
       tils_tsr_wsi_summary.csv
       cluster_tils_tsr_overlay.png
 
-Usage
------
+Pipeline position
+-----------------
+    tessellate.py  →  segmenter.py  →  stitch.py  →  tumor_roi_overlay.py  →  cluster_tils_tsr_score.py
+
+Usage (as a library)
+---------------------
     from cluster_tils_tsr_score import run_cluster_tils_tsr_score
     from config import cfg
 
     run_cluster_tils_tsr_score("slides/TCGA-A1-A0SP.svs", cfg)
+
+Usage (from the command line)
+------------------------------
+Same shared flags as config.py / tessellate.py / segmenter.py / stitch.py /
+tumor_roi_overlay.py — every PipelineConfig field is available here too,
+including the CLUSTER_* / TILS_DENOMINATOR knobs. Also supports --from-json
+to pick up a config saved earlier via `config.py --print-config`.
+
+    # minimal — requires tumor_roi_overlay.py to have already run for this slide
+    python cluster_tils_tsr_score.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python cluster_tils_tsr_score.py --from-json run_config.json
+
+    # continue from a saved config but override the sTILs denominator
+    python cluster_tils_tsr_score.py --from-json run_config.json \\
+        --tils-denominator tissue
+
+    # see every available flag
+    python cluster_tils_tsr_score.py --help
 """
 
 from __future__ import annotations
@@ -1120,3 +1147,51 @@ def run_cluster_tils_tsr_score(
         "overlay_png":     result["overlay_png"],
         "wsi_summary":     s,
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) — every PipelineConfig
+# field (including TILS_DENOMINATOR and the CLUSTER_* knobs) is available
+# as a flag, plus --from-json to pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python cluster_tils_tsr_score.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    slide_name = Path(cfg.WSI_PATH).stem
+    roi_csv = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "spatial_feature_results" / "tumor_roi_overlay" / "tumor_roi_boxes.csv"
+    )
+    geojson = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "segmentation" / "segmentation_all_classes.geojson"
+    )
+    if not roi_csv.exists():
+        raise SystemExit(
+            f"ROI boxes CSV not found: {roi_csv}. "
+            f"Run tumor_roi_overlay.py for this slide (with the same --out-dir) first."
+        )
+    if not geojson.exists():
+        raise SystemExit(
+            f"Segmentation GeoJSON not found: {geojson}. "
+            f"Run stitch.py for this slide (with the same --out-dir) first."
+        )
+
+    run_cluster_tils_tsr_score(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()

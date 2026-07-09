@@ -1,12 +1,27 @@
+# ViP-SegD Conda Environment
+# Virchow2-Powered Segmentation & Spatial Feature Pipeline
+# Python 3.11 | CUDA 12.1 | PyTorch 2.5.1
+#
+# Create:   conda env create -f ViP-SegD_environment.yml
+# Activate: conda activate vipsegd
+# Update:   conda env update -f ViP-SegD_environment.yml --prune
+#
+# Miniforge users: use conda (not mamba) as requested
+#   conda env create -f ViP-SegD_environment.yml
+
 name: vipsegd
 
 channels:
   - conda-forge
-  - defaults
+  - nodefaults       # avoids Anaconda default channel conflicts + licensing
 
 dependencies:
   - python=3.11
   - pip
+
+  # ── Quarto (report generation) ───────────────────────────────────────────
+  # Installed via conda-forge to avoid pip/system conflicts
+  - quarto
 
   - pip:
     # ── PyTorch (CUDA 12.1) ──────────────────────────────────────────────────
@@ -16,17 +31,15 @@ dependencies:
 
     # ── Virchow2 encoder ─────────────────────────────────────────────────────
     - timm==1.0.17
-    - huggingface-hub==0.33.4
+    - huggingface-hub[cli]==0.33.4   # [cli] extra enables huggingface-cli login
     - safetensors==0.5.3
     - transformers==4.53.2
-    - ml-dtypes==0.5.3
+    - ml_dtypes            # bfloat16 etc. — required by timm/transformers when loading Virchow2
+    - open_clip_torch      # pulled in by timm.create_model() for some hub model configs
 
-    # ── OpenCLIP ─────────────────────────────────────────────────────────────
-    - open_clip_torch==2.32.0
-
-    # ── Mussel folder dependencies (tessellation) ────────────────────────────
-    # Mussel is used as a local folder — not pip installed.
-    # Only the packages Mussel imports at runtime are listed here.
+    # ── Mussel (tessellation) ────────────────────────────────────────────────
+    # Pinned to exact commit for reproducibility
+    - git+https://github.com/pathology-data-mining/Mussel.git@5fed0ee6fea322f17ddf390a91e24e0615af8df2#egg=mussel
     - omegaconf==2.3.0
     - hydra-core==1.3.2
     - h5py==3.14.0
@@ -34,6 +47,8 @@ dependencies:
     - tifffile==2025.5.10
     - imagecodecs==2025.3.30
     - einops==0.8.1
+    - openslide-python==1.4.1  # optional: WSI thumbnail overlay in tumor_roi_overlay.py (step 5)
+    - openslide-bin            # bundles the compiled OpenSlide shared library — avoids needing a separate system install. See https://openslide.org/api/python/#installing
 
     # ── Image processing (segmentation + stitching) ──────────────────────────
     - opencv-python-headless==4.12.0.88
@@ -52,16 +67,17 @@ dependencies:
     - pyproj==3.7.1
     - scipy==1.16.0
 
-    # ── Survival analysis ────────────────────────────────────────────────────
-    - lifelines==0.30.0
-    - statsmodels==0.14.6
-    - scikit-learn==1.7.0
-
     # ── Visualisation ────────────────────────────────────────────────────────
     - matplotlib==3.10.3
     - seaborn==0.13.2
 
-    # ── Jupyter (notebook walkthrough) ───────────────────────────────────────
-    - jupyterlab==4.4.7
+    # ── Jupyter (pinned as a coherent stack to avoid server conflicts) ────────
+    # All four must be pinned together — mismatches cause kernel/server errors.
+    # Do NOT install jupyterlab via pip if conda-forge jupyter is also present.
+    - jupyterlab==4.3.6
+    - jupyter_server==2.14.2
     - ipykernel==6.29.5
-    - ipywidgets==8.1.8
+    - ipywidgets==8.1.5
+    # Quarto requires these exact versions to execute .qmd notebooks
+    - nbformat==5.10.4
+    - nbclient==0.10.2

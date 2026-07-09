@@ -2,13 +2,13 @@
 config.py
 =========
 Central configuration for the ViP-SegD pipeline.
+
 All paths, hyperparameters, and flags live here.
 Import this in every pipeline script instead of hardcoding values.
 
-Usage
------
+Usage (as a library)
+---------------------
     from config import cfg, PipelineConfig
-
     # Use the default singleton
     from run_vipsegd import run_vipsegd
     results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg)
@@ -17,12 +17,54 @@ Usage
     from dataclasses import replace
     cfg2 = replace(cfg, CHECKPOINT="weights/phaseA_best.pt", MPP=0.50)
     results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg2)
+
+Usage (from the command line)
+------------------------------
+Every field on PipelineConfig is auto-exposed as a `--flag`, so you never
+have to hand-maintain a second copy of the arguments list.
+
+    # See every available flag with its type and default
+    python config.py --help
+
+    # Build a config, print it as JSON, and exit
+    python config.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+                      --checkpoint weights/phaseA_best.pt \\
+                      --mpp 0.50 --print-config
+
+    # Save that JSON to a file so you can reuse it later
+    python config.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+                      --checkpoint weights/phaseA_best.pt \\
+                      --mpp 0.50 --print-config > run_config.json
+
+    # Build a config and actually run the pipeline
+    # (requires run_vipsegd.py to be importable on PYTHONPATH)
+    python config.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+                      --checkpoint weights/phaseA_best.pt \\
+                      --out-dir vipsegd_output --run
+
+    # Later: reload a previously saved config and run from it directly
+    python config.py --from-json run_config.json --run
+
+    # Reload a saved config but override one or two fields at run time
+    python config.py --from-json run_config.json --device cpu --run
+
+    # List-, tuple- and set-typed fields take comma-separated values
+    python config.py --immune-proximity-thresholds-um 10,25,50,100 \\
+                      --thumbnail-size 512,512 \\
+                      --morphology-tumor-class-names Tumour,Tumor --print-config
+
+You can also import `config_from_args()` / `build_arg_parser()` /
+`config_from_json()` directly in another script if you want CLI parsing
+without going through `main()`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import argparse
+import json
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
+from typing import Any, Optional
 
 
 @dataclass
@@ -80,7 +122,7 @@ class PipelineConfig:
     #   "salgado"                   → Inflammatory / Stroma             (recommended)
     #   "stroma_plus_inflammatory"  → Inflammatory / (Stroma + Inflam)
     #   "tissue"                    → Inflammatory / viable tissue
-    CLUSTER_BUFFER_UM:           float = 200.0  # buffer around ROI boxes → scoring polygon
+    CLUSTER_BUFFER_UM:           float = 300.0  # buffer around ROI boxes → scoring polygon
     CLUSTER_MIN_ROI_BOXES:       int   = 5      # min ROI boxes to keep a cluster
     CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0   # minimum GeoJSON polygon area filter
     CLUSTER_MAX_AREA_QUANTILE:   float = 1.0    # upper area quantile filter (1.0 = off)
@@ -103,7 +145,7 @@ class PipelineConfig:
     # ── Stage 7: Necrosis proximity features ───────────────────────────────
     NECROSIS_PROXIMITY_THRESHOLDS_UM:      list  = field(default_factory=lambda: [50.0, 100.0])
     NECROSIS_CONTACT_TOLERANCE_UM:         float = 5.0    # necrosis within this = "contact"
-    NECROSIS_IMMUNE_COUPLING_THRESHOLD_UM: float = 100.0  # necrosis within this of immune = coupled
+    NECROSIS_IMMUNE_COUPLING_THRESHOLD_UM: float = 20.0  # necrosis within this of immune = coupled
     NECROSIS_MIN_COMPONENT_AREA_UM2:       float = 500.0  # noise filter for shape analysis
     NECROSIS_ABSENT_MAX_AREA_UM2:          float = 500.0  # < this → necrosis-absent phenotype
     NECROSIS_CENTRAL_MIN_INTRA_FRAC:       float = 0.50   # ≥ this intratumoral → tumour-central
@@ -127,7 +169,6 @@ class PipelineConfig:
     #   GeoJSON.  Extend if your pipeline uses a different naming convention.
 
     # ── Convenience properties (read-only) ─────────────────────────────────
-
     @property
     def out_dir(self) -> Path:
         """cfg.OUT_DIR as a Path object."""
@@ -144,7 +185,6 @@ class PipelineConfig:
         return str(self.out_dir / "cohort_features.csv")
 
     # ── Per-slide path helpers ──────────────────────────────────────────────
-
     def slide_outdir(self, slide_name: str) -> Path:
         """Root output directory for one slide: OUT_DIR/<slide_name>/"""
         return self.out_dir / slide_name
@@ -189,3 +229,238 @@ class PipelineConfig:
 #     my_cfg = replace(cfg, OUT_DIR="/scratch/myrun", MPP=0.50)
 #
 cfg = PipelineConfig()
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI support
+# ═════════════════════════════════════════════════════════════════════════
+# The functions below auto-derive a command-line interface from the
+# dataclass fields above, so the CLI can never drift out of sync with
+# PipelineConfig — add/remove/rename a field and the flag follows.
+
+def _flag_name(field_name: str) -> str:
+    """PATCH_SIZE -> --patch-size"""
+    return "--" + field_name.lower().replace("_", "-")
+
+
+def _parse_bool(value: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    v = value.strip().lower()
+    if v in ("true", "t", "1", "yes", "y", "on"):
+        return True
+    if v in ("false", "f", "0", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
+
+
+def _parse_list_of_number(value: str) -> list:
+    """'20,50,100,200' -> [20.0, 50.0, 100.0, 200.0]"""
+    return [float(x) for x in value.split(",") if x.strip() != ""]
+
+
+def _parse_tuple_of_int(value: str) -> tuple:
+    """'1024,1024' -> (1024, 1024)"""
+    return tuple(int(x) for x in value.split(",") if x.strip() != "")
+
+
+def _parse_set_of_str(value: str) -> set:
+    """'Tumour,Tumor' -> {'Tumour', 'Tumor'}"""
+    return {x.strip() for x in value.split(",") if x.strip() != ""}
+
+
+def add_config_fields_to_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """
+    Add one `--flag` per PipelineConfig field to an existing parser.
+
+    Factored out of build_arg_parser() so other pipeline-stage scripts
+    (tessellate.py, segment.py, ...) can build their own ArgumentParser with
+    a stage-specific description/epilog and still get every config field as
+    a flag for free, without also inheriting config.py's own --run /
+    --print-config flags (which are specific to the full-pipeline entry
+    point in this file's main()).
+
+        parser = argparse.ArgumentParser(prog="tessellate.py", ...)
+        add_config_fields_to_parser(parser)
+        args = parser.parse_args()
+    """
+    defaults = PipelineConfig()
+    for f in fields(PipelineConfig):
+        name = f.name
+        flag = _flag_name(name)
+        current = getattr(defaults, name)
+        help_text = f.metadata.get("help", "") if f.metadata else ""
+
+        # dest is pinned to the exact dataclass field name (argparse would
+        # otherwise lowercase "--out-dir" to "out_dir", not "OUT_DIR").
+        if isinstance(current, bool):
+            parser.add_argument(
+                flag, dest=name, type=_parse_bool, default=current, metavar="{true,false}",
+                help=f"[bool] {help_text}",
+            )
+        elif isinstance(current, tuple):
+            parser.add_argument(
+                flag, dest=name, type=_parse_tuple_of_int, default=current, metavar="INT,INT,...",
+                help=f"[tuple[int], comma-separated] {help_text}",
+            )
+        elif isinstance(current, list):
+            parser.add_argument(
+                flag, dest=name, type=_parse_list_of_number, default=current, metavar="NUM,NUM,...",
+                help=f"[list[float], comma-separated] {help_text}",
+            )
+        elif isinstance(current, set):
+            parser.add_argument(
+                flag, dest=name, type=_parse_set_of_str, default=current, metavar="STR,STR,...",
+                help=f"[set[str], comma-separated] {help_text}",
+            )
+        elif isinstance(current, int):  # after bool check, since bool is an int subclass
+            parser.add_argument(flag, dest=name, type=int, default=current, help=f"[int] {help_text}")
+        elif isinstance(current, float):
+            parser.add_argument(flag, dest=name, type=float, default=current, help=f"[float] {help_text}")
+        elif current is None or isinstance(current, str):
+            parser.add_argument(
+                flag, dest=name, type=str, default=current,
+                help=f"[str{'|None' if current is None else ''}] {help_text}",
+            )
+        else:
+            # Fallback for any future field type: pass through as a string.
+            parser.add_argument(
+                flag, dest=name, type=str, default=current,
+                help=f"[{type(current).__name__}] {help_text}",
+            )
+    return parser
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Auto-generate the full-pipeline CLI parser: every PipelineConfig field
+    as a flag, plus config.py's own --print-config / --run / --from-json
+    flags.
+    """
+    parser = argparse.ArgumentParser(
+        prog="vipsegd",
+        description="ViP-SegD pipeline — build a PipelineConfig (and optionally run the "
+                     "pipeline) from the command line.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    add_config_fields_to_parser(parser)
+    parser.add_argument(
+        "--print-config", action="store_true",
+        help="Print the resolved configuration as JSON and exit (no pipeline run).",
+    )
+    parser.add_argument(
+        "--run", action="store_true",
+        help="After building the config, import run_vipsegd and execute "
+             "run_vipsegd(WSI_PATH, cfg).",
+    )
+    parser.add_argument(
+        "--from-json", type=str, default=None,
+        help="Load a PipelineConfig previously saved via --print-config "
+             "(e.g. `python config.py --print-config > run_config.json`). "
+             "Any other --flag passed alongside this one overrides the "
+             "corresponding field from the JSON file. Combine with --run "
+             "to execute immediately, e.g. "
+             "`python config.py --from-json run_config.json --run`.",
+    )
+    return parser
+
+
+def config_from_json(path: str) -> PipelineConfig:
+    """
+    Load a PipelineConfig from a JSON file previously written by
+    `python config.py --print-config > run_config.json`.
+    """
+    with open(path, "r") as fh:
+        data = json.load(fh)
+
+    valid = {f.name for f in fields(PipelineConfig)}
+    unknown = set(data) - valid
+    if unknown:
+        raise SystemExit(f"Unknown field(s) in {path}: {sorted(unknown)}")
+
+    coerced = {}
+    defaults = PipelineConfig()
+    for f in fields(PipelineConfig):
+        if f.name not in data:
+            continue
+        default = getattr(defaults, f.name)
+        val = data[f.name]
+        # list/tuple/set-typed fields round-trip through JSON as plain
+        # lists; coerce them back to the annotated type.
+        if isinstance(default, tuple) and isinstance(val, list):
+            val = tuple(val)
+        elif isinstance(default, set) and isinstance(val, list):
+            val = set(val)
+        coerced[f.name] = val
+
+    return replace(PipelineConfig(), **coerced)
+
+
+def config_from_args(argv: Optional[list] = None) -> tuple[PipelineConfig, argparse.Namespace]:
+    """
+    Parse CLI args and return (PipelineConfig, argparse.Namespace).
+
+    Any flag the user didn't pass falls back to the PipelineConfig default,
+    so this is safe to call with a partial command line.
+
+    If --from-json is given, that file becomes the base config, and only
+    the flags the user *explicitly* passed on top of it are applied as
+    overrides (flags left at their CLI default do not clobber the JSON
+    values).
+    """
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+
+    if args.from_json:
+        base_cfg = config_from_json(args.from_json)
+        defaults = PipelineConfig()
+        overrides = {
+            f.name: getattr(args, f.name)
+            for f in fields(PipelineConfig)
+            if getattr(args, f.name) != getattr(defaults, f.name)
+        }
+        new_cfg = replace(base_cfg, **overrides)
+    else:
+        overrides = {f.name: getattr(args, f.name) for f in fields(PipelineConfig)}
+        new_cfg = replace(PipelineConfig(), **overrides)
+
+    return new_cfg, args
+
+
+def _json_default(o: Any):
+    if isinstance(o, (set, tuple)):
+        return list(o)
+    if isinstance(o, Path):
+        return str(o)
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def main(argv: Optional[list] = None) -> None:
+    new_cfg, args = config_from_args(argv)
+
+    if args.print_config:
+        print(json.dumps(new_cfg.__dict__, indent=2, default=_json_default))
+        return
+
+    if args.run:
+        try:
+            from run_vipsegd import run_vipsegd
+        except ImportError as e:
+            raise SystemExit(
+                "Could not import run_vipsegd — make sure run_vipsegd.py is on "
+                f"the Python path (same directory or PYTHONPATH). Original error: {e}"
+            )
+        results = run_vipsegd(new_cfg.WSI_PATH, new_cfg)
+        print(results)
+        return
+
+    # Default: no action flag given — just confirm the config built cleanly.
+    print("Config built successfully. Pass --print-config to view it in full, "
+          "or --run to execute the pipeline.")
+    print(f"  WSI_PATH   = {new_cfg.WSI_PATH}")
+    print(f"  CHECKPOINT = {new_cfg.CHECKPOINT}")
+    print(f"  OUT_DIR    = {new_cfg.OUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()

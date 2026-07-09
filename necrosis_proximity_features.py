@@ -2,10 +2,10 @@
 """
 necrosis_proximity_features.py
 ================================
-Spatial-analysis stage — necrosis proximity feature extraction.
+Stage 7 of the ViP-SegD pipeline — necrosis proximity feature extraction.
 
-Reads cluster polygons produced by run_cluster_tils_tsr_score() and the
-segmentation GeoJSON produced by run_stitching().
+Reads cluster polygons produced by run_cluster_tils_tsr_score() (stage 5)
+and the segmentation GeoJSON produced by run_stitching() (stage 3).
 
 Output directory
 ----------------
@@ -15,17 +15,42 @@ Output directory
         necrosis_distance_figure.png
         necrosis_tissue_context_figure.png
 
-Usage
------
+Pipeline position
+-----------------
+    tessellate.py → segmenter.py → stitch.py → tumor_roi_overlay.py
+        → cluster_tils_tsr_score.py → immune_proximity_features.py
+        → necrosis_proximity_features.py → tumor_morphology_features.py
+
+Usage (as a library)
+---------------------
     from necrosis_proximity_features import run_necrosis_proximity_features
     from config import cfg
 
     run_necrosis_proximity_features("slides/TCGA-A1-A0SP.svs", cfg)
+
+Usage (from the command line)
+------------------------------
+Same shared flags as the rest of the pipeline — every PipelineConfig field
+is available here too, including the NECROSIS_* knobs. Also supports
+--from-json to pick up a config saved earlier via `config.py --print-config`.
+
+    # minimal — requires cluster_tils_tsr_score.py to have already run
+    python necrosis_proximity_features.py --wsi-path slides/TCGA-A1-A0SP.svs \\
+        --out-dir vipsegd_output
+
+    # continue from a config saved earlier
+    python necrosis_proximity_features.py --from-json run_config.json
+
+    # continue from a saved config but override one knob
+    python necrosis_proximity_features.py --from-json run_config.json \\
+        --necrosis-immune-coupling-threshold-um 150
+
+    # see every available flag
+    python necrosis_proximity_features.py --help
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 from dataclasses import dataclass, field
@@ -847,3 +872,51 @@ def run_necrosis_proximity_features(
         "distance_png":         str(out_dir / "necrosis_distance_figure.png"),
         "context_png":          str(out_dir / "necrosis_tissue_context_figure.png"),
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# CLI entry point
+# ═════════════════════════════════════════════════════════════════════════
+# Reuses config.py's full CLI (config_from_args) — every PipelineConfig
+# field (including the NECROSIS_* knobs) is available as a flag, plus
+# --from-json to pick up a config saved earlier via:
+#
+#     python config.py --print-config > run_config.json
+#     python necrosis_proximity_features.py --from-json run_config.json
+
+def main(argv=None) -> None:
+    from config import config_from_args
+
+    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required (path to a .svs / .tif slide), "
+            "either directly or via --from-json"
+        )
+
+    slide_name = Path(cfg.WSI_PATH).stem
+    cluster_geojson = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "spatial_feature_results" / "cluster_tils_tsr_score" / "cluster_scoring_polygons.geojson"
+    )
+    seg_geojson = (
+        Path(cfg.OUT_DIR) / slide_name
+        / "segmentation" / "segmentation_all_classes.geojson"
+    )
+    if not cluster_geojson.exists():
+        raise SystemExit(
+            f"Cluster GeoJSON not found: {cluster_geojson}. "
+            f"Run cluster_tils_tsr_score.py for this slide (with the same --out-dir) first."
+        )
+    if not seg_geojson.exists():
+        raise SystemExit(
+            f"Segmentation GeoJSON not found: {seg_geojson}. "
+            f"Run stitch.py for this slide (with the same --out-dir) first."
+        )
+
+    run_necrosis_proximity_features(wsi_path=cfg.WSI_PATH, cfg=cfg)
+
+
+if __name__ == "__main__":
+    main()
