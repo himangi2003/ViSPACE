@@ -84,6 +84,7 @@ class PipelineConfig:
     CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"  # path to ViP-SegD model checkpoint
     WSI_PATH:  str = "your data path"              #  .svs / .tif slides
 
+
     # ── Mussel (tessellation) ───────────────────────────────────────────────
     MUSSEL_DIR:     str   = "Mussel/"  # cloned Mussel repo root
     PATCH_SIZE:     int   = 224                 # tile edge in pixels
@@ -165,6 +166,10 @@ class PipelineConfig:
     MORPHOLOGY_TUMOR_CLASS_NAMES:   set   = field(
         default_factory=lambda: {"Tumour", "Tumor", "tumour", "tumor"}
     )
+
+        # ── ✏  When extracting parameters for cohort — set these before running ─────────────────────────────
+    COHORT_DATA_PATH: str = "path to your cohort data"  # 
+    COHORT_META_DATA:  str = "path to your data path"   #  
     #   Set of class name strings that count as tumour in the segmentation
     #   GeoJSON.  Extend if your pipeline uses a different naming convention.
 
