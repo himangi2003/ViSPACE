@@ -24,7 +24,7 @@ execute:
   warning: false
   message: false
 params:
-  wsi_path: "TCGA-S3-AA10-01Z-00-DX1.C0468882-0DD8-4FC5-8C2F-E18BE8000F69.tif"
+  wsi_path: "/lab/deasylab3/Jung/Data/Shared_Data/TCGA_TNBC/histology/TCGA-S3-AA15-01Z-00-DX1.A2456A4A-E6E8-4429-8F09-B997AA497BB0.tif"
   out_dir: "vipsegd_output"
 ---
 
@@ -42,7 +42,7 @@ params:
 #| tags: [parameters]
 from pathlib import Path
 
-wsi_path = 'TCGA-S3-AA10-01Z-00-DX1.C0468882-0DD8-4FC5-8C2F-E18BE8000F69.tif'
+wsi_path = '/lab/deasylab3/Jung/Data/Shared_Data/TCGA_TNBC/histology/TCGA-S3-AA15-01Z-00-DX1.A2456A4A-E6E8-4429-8F09-B997AA497BB0.tif'
 wsi = Path(wsi_path)
 slide_name = wsi.stem
 out_dir = 'vipsegd_output'

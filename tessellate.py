@@ -1,9 +1,13 @@
 """
 tessellate.py
 =============
-Step 1 of the ViP-SegD pipeline.
+Step 1 of the ViSpace pipeline.
 
-Runs Mussel tiling on one WSI using settings from config.py.
+Runs Mussel tiling on one whole-slide image using settings from config.py.
+
+Mussel must be installed in the active Python environment, for example:
+
+    pip install "mussel-pathology[torch-gpu]"
 
 Output directory
 ----------------
@@ -14,169 +18,426 @@ Output directory
         thumbnail.png
         <slide>.h5
 
-Usage (as a library)
----------------------
+Usage as a library
+------------------
     from tessellate import run_tessellation
     from config import cfg
-    outdir = run_tessellation(
-        wsi_path = "slides/TCGA-A1-A0SP.svs",
-        cfg      = cfg,
+
+    tess_dir = run_tessellation(
+        wsi_path=cfg.WSI_PATH,
+        cfg=cfg,
     )
 
-Usage (from the command line)
-------------------------------
-tessellate.py shares its CLI with config.py — every PipelineConfig field
-(including MUSSEL_DIR, PATCH_SIZE, WORKERS, SEGMENT_THRESH, THUMBNAIL_SIZE,
-OUT_DIR, WSI_PATH, ...) is available as a flag, so you don't need to learn a
-second set of arguments for this step. It also supports --from-json, so you
-can pick up a config saved earlier via `config.py --print-config`.
+Usage from the command line
+---------------------------
+tessellate.py shares its CLI with config.py. Relevant PipelineConfig fields,
+including PATCH_SIZE, WORKERS, SEGMENT_THRESH, THUMBNAIL_SIZE, OUT_DIR,
+and WSI_PATH, are available as command-line flags.
 
-    # minimal
+    # Minimal
     python tessellate.py --wsi-path slides/TCGA-A1-A0SP.svs
 
-    # pointing at a non-default Mussel checkout, custom patch size / workers
-    python tessellate.py \\
-        --wsi-path slides/TCGA-A1-A0SP.svs \\
-        --mussel-dir /opt/Mussel \\
-        --patch-size 224 \\
-        --workers 8 \\
-        --segment-thresh 20 \\
+    # Custom settings
+    python tessellate.py \
+        --wsi-path slides/TCGA-A1-A0SP.svs \
+        --patch-size 224 \
+        --workers 8 \
+        --segment-thresh 20 \
         --out-dir vipsegd_output
 
-    # continue from a config saved earlier
+    # Continue from a saved configuration
     python tessellate.py --from-json run_config.json
 
-    # continue from a saved config but override one field
-    python tessellate.py --from-json run_config.json --patch-size 256
+    # Override one saved field
+    python tessellate.py \
+        --from-json run_config.json \
+        --patch-size 256
 
-    # see every available flag
+    # Display available flags
     python tessellate.py --help
 """
-import sys
+
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Optional, Tuple, Union
 
 from omegaconf import OmegaConf
 
-from config import cfg as default_cfg, PipelineConfig
+from config import PipelineConfig
+from config import cfg as default_cfg
+
+
+ThumbnailSize = Union[int, Tuple[int, int]]
+
+
+def _load_mussel_tessellate():
+    """
+    Import Mussel's tessellation module and configuration classes.
+
+    Returns
+    -------
+    tuple
+        tessellate_module, TessellateConfig, SegConfig
+
+    Raises
+    ------
+    ImportError
+        If mussel-pathology is not installed or cannot be imported.
+    """
+    try:
+        import mussel.cli.tessellate as tessellate_module
+        from mussel.cli.tessellate import SegConfig, TessellateConfig
+    except ImportError as exc:
+        raise ImportError(
+            "Mussel could not be imported.\n\n"
+            "Install it in the active environment with:\n"
+            '  pip install "mussel-pathology[torch-gpu]"\n\n'
+            "In Google Colab, restart the runtime after installation."
+        ) from exc
+
+    return tessellate_module, TessellateConfig, SegConfig
+
+
+def _get_mussel_version() -> str:
+    """
+    Return the installed mussel-pathology distribution version.
+    """
+    try:
+        return version("mussel-pathology")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _validate_thumbnail_size(value) -> ThumbnailSize:
+    """
+    Validate and normalize THUMBNAIL_SIZE.
+
+    Supported formats
+    -----------------
+    int
+        A single positive integer.
+
+    tuple/list
+        Two positive integers representing width and height.
+
+    Examples
+    --------
+    1024
+
+    (1024, 1024)
+
+    [1024, 768]
+
+    Parameters
+    ----------
+    value
+        Value from cfg.THUMBNAIL_SIZE.
+
+    Returns
+    -------
+    int or tuple[int, int]
+        Validated and normalized thumbnail size.
+
+    Raises
+    ------
+    TypeError
+        If the value is not an integer or a two-element sequence.
+    ValueError
+        If dimensions are missing, non-integer, or non-positive.
+    """
+    if isinstance(value, bool):
+        raise TypeError(
+            "THUMBNAIL_SIZE cannot be a Boolean value. "
+            f"Got {value!r}."
+        )
+
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(
+                "THUMBNAIL_SIZE must be greater than zero. "
+                f"Got {value}."
+            )
+
+        return value
+
+    if isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            raise ValueError(
+                "THUMBNAIL_SIZE must contain exactly two values: "
+                "(width, height). "
+                f"Got {value!r}."
+            )
+
+        width, height = value
+
+        if isinstance(width, bool) or isinstance(height, bool):
+            raise TypeError(
+                "THUMBNAIL_SIZE dimensions must be integers, not Boolean "
+                f"values. Got {value!r}."
+            )
+
+        if not isinstance(width, int) or not isinstance(height, int):
+            raise TypeError(
+                "THUMBNAIL_SIZE width and height must be integers. "
+                f"Got {value!r}."
+            )
+
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "THUMBNAIL_SIZE width and height must be greater than zero. "
+                f"Got {value!r}."
+            )
+
+        return width, height
+
+    raise TypeError(
+        "THUMBNAIL_SIZE must be either a positive integer or a "
+        "two-element tuple/list such as (1024, 1024). "
+        f"Got {type(value).__name__}: {value!r}"
+    )
+
+
+def _count_patch_images(patches_dir: Path) -> int:
+    """
+    Count patch image files in the Mussel patch output directory.
+    """
+    supported_extensions = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+
+    if not patches_dir.exists():
+        return 0
+
+    return sum(
+        1
+        for path in patches_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in supported_extensions
+    )
 
 
 def run_tessellation(
     wsi_path: str,
-    cfg: PipelineConfig = None,
+    cfg: Optional[PipelineConfig] = None,
 ) -> str:
     """
-    Run Mussel tiling on a single WSI.
+    Run Mussel tiling on a single whole-slide image.
 
     Parameters
     ----------
-    wsi_path : path to .svs / .tif
-    cfg      : PipelineConfig (defaults to config.cfg singleton)
+    wsi_path
+        Path to the input whole-slide image, such as an SVS, SCN, TIF,
+        or TIFF file.
+
+    cfg
+        Pipeline configuration. Defaults to the config.cfg singleton.
 
     Returns
     -------
-    str : path to the slide tessellation directory
-          cfg.OUT_DIR/<slide_name>/tessellation/
-          contains: patches/, mask.png, grid_mask.png, thumbnail.png, <slide>.h5
+    str
+        Path to:
+
+        cfg.OUT_DIR/<slide_name>/tessellation/
+
+    Raises
+    ------
+    FileNotFoundError
+        If the input slide does not exist.
+
+    ValueError
+        If configuration values are invalid.
+
+    ImportError
+        If mussel-pathology cannot be imported.
+
+    RuntimeError
+        If Mussel fails or does not create the expected HDF5 file.
     """
     if cfg is None:
         cfg = default_cfg
 
-    # FIX 1: Validate that MUSSEL_DIR exists before inserting into sys.path.
-    # Previously, sys.path.insert() silently succeeded even if the directory
-    # was missing, leading to a cryptic ImportError later.
-    mussel_dir = Path(cfg.MUSSEL_DIR)
-    if not mussel_dir.exists():
+    if not wsi_path:
+        raise ValueError("wsi_path cannot be empty.")
+
+    wsi = Path(wsi_path).expanduser()
+
+    if not wsi.exists():
         raise FileNotFoundError(
-            f"Mussel not found at '{cfg.MUSSEL_DIR}'. "
-            f"Clone the Mussel repository and set MUSSEL_DIR in config.py (or pass "
-            f"--mussel-dir on the command line) to its root path.\n"
-            f"  git clone https://github.com/pathology-data-mining/Mussel {cfg.MUSSEL_DIR}"
+            f"Whole-slide image not found: {wsi}"
         )
 
-    # Add Mussel to path at call time — not at import time
-    # so the module works even if Mussel is not installed globally
-    if str(mussel_dir) not in sys.path:
-        sys.path.insert(0, str(mussel_dir))
+    if not wsi.is_file():
+        raise FileNotFoundError(
+            f"WSI path is not a file: {wsi}"
+        )
 
-    import mussel.cli.tessellate
-    from mussel.cli.tessellate import TessellateConfig, SegConfig
+    if isinstance(cfg.PATCH_SIZE, bool) or not isinstance(
+        cfg.PATCH_SIZE,
+        int,
+    ):
+        raise TypeError(
+            "PATCH_SIZE must be an integer. "
+            f"Got {type(cfg.PATCH_SIZE).__name__}: {cfg.PATCH_SIZE!r}"
+        )
 
-    wsi        = Path(wsi_path)
+    if cfg.PATCH_SIZE <= 0:
+        raise ValueError(
+            "PATCH_SIZE must be greater than zero. "
+            f"Got {cfg.PATCH_SIZE}."
+        )
+
+    if isinstance(cfg.WORKERS, bool) or not isinstance(cfg.WORKERS, int):
+        raise TypeError(
+            "WORKERS must be an integer. "
+            f"Got {type(cfg.WORKERS).__name__}: {cfg.WORKERS!r}"
+        )
+
+    if cfg.WORKERS < 0:
+        raise ValueError(
+            "WORKERS must be zero or greater. "
+            f"Got {cfg.WORKERS}."
+        )
+
+    if not isinstance(cfg.SEGMENT_THRESH, (int, float)):
+        raise TypeError(
+            "SEGMENT_THRESH must be numeric. "
+            f"Got {type(cfg.SEGMENT_THRESH).__name__}: "
+            f"{cfg.SEGMENT_THRESH!r}"
+        )
+
+    thumbnail_size = _validate_thumbnail_size(
+        cfg.THUMBNAIL_SIZE
+    )
+
+    tessellate_module, TessellateConfig, SegConfig = (
+        _load_mussel_tessellate()
+    )
+
     slide_name = wsi.stem
-    outdir     = Path(cfg.OUT_DIR) / slide_name / "tessellation"
-    outdir.mkdir(parents=True, exist_ok=True)
+
+    outdir = (
+        Path(cfg.OUT_DIR).expanduser()
+        / slide_name
+        / "tessellation"
+    )
+
+    patches_dir = outdir / "patches"
+
+    outdir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    patches_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     output_h5_path = outdir / f"{slide_name}.h5"
+    output_mask_path = outdir / "mask.png"
+    output_grid_mask_path = outdir / "grid_mask.png"
+    output_thumbnail_path = outdir / "thumbnail.png"
 
-    print(f"\n{'='*55}")
-    print(f"  Tessellation")
-    print(f"  Slide      : {wsi.name}")
-    print(f"  Mussel dir : {cfg.MUSSEL_DIR}")
-    print(f"  Patch size : {cfg.PATCH_SIZE}")
-    print(f"  Workers    : {cfg.WORKERS}")
-    print(f"  Output     : {outdir}")
-    print(f"{'='*55}")
+    print(f"\n{'=' * 60}")
+    print("  ViSpace Tessellation")
+    print(f"  Slide          : {wsi.name}")
+    print(f"  Slide path     : {wsi.resolve()}")
+    print(f"  Mussel version : {_get_mussel_version()}")
+    print(f"  Patch size     : {cfg.PATCH_SIZE}")
+    print(f"  Workers        : {cfg.WORKERS}")
+    print(f"  Segment thresh : {cfg.SEGMENT_THRESH}")
+    print(f"  Thumbnail size : {thumbnail_size}")
+    print(f"  Output         : {outdir.resolve()}")
+    print(f"{'=' * 60}")
 
     seg_config = SegConfig(
-        patch_size        = cfg.PATCH_SIZE,
-        use_otsu          = True,
-        segment_threshold = cfg.SEGMENT_THRESH,
+        patch_size=cfg.PATCH_SIZE,
+        use_otsu=True,
+        segment_threshold=cfg.SEGMENT_THRESH,
     )
 
     tess_config = TessellateConfig(
-        slide_path            = str(wsi),
-        output_h5_path        = str(output_h5_path),
-        output_png_dir        = str(outdir / "patches"),
-        output_mask_path      = str(outdir / "mask.png"),
-        output_grid_mask_path = str(outdir / "grid_mask.png"),
-        output_thumbnail_path = str(outdir / "thumbnail.png"),
-        thumbnail_size        = cfg.THUMBNAIL_SIZE,
-        seg_config            = seg_config,
-        num_workers           = cfg.WORKERS,
+        slide_path=str(wsi.resolve()),
+        output_h5_path=str(output_h5_path.resolve()),
+        output_png_dir=str(patches_dir.resolve()),
+        output_mask_path=str(output_mask_path.resolve()),
+        output_grid_mask_path=str(
+            output_grid_mask_path.resolve()
+        ),
+        output_thumbnail_path=str(
+            output_thumbnail_path.resolve()
+        ),
+        thumbnail_size=thumbnail_size,
+        seg_config=seg_config,
+        num_workers=cfg.WORKERS,
     )
 
-    # FIX 2: Removed the misleading tqdm(total=1) wrapper that showed "1/1"
-    # instantly and gave no real progress signal.
-    # Mussel does not currently expose a per-tile progress callback, so we
-    # print a clear start/end message instead. If Mussel adds a callback in
-    # the future, wire it up here.
-    print(f"\n  Running Mussel tessellation (this may take a while)...")
-    mussel.cli.tessellate.main(OmegaConf.create(tess_config))
+    print(
+        "\n  Running Mussel tessellation. "
+        "Large slides may take some time..."
+    )
 
-    if output_h5_path.exists():
-        n_patches = len(list((outdir / "patches").glob("*.png")))
-        print(f"\n  Done. {n_patches:,} patches saved → {outdir}")
-        return str(outdir)
-    else:
+    try:
+        mussel_config = OmegaConf.structured(tess_config)
+    except Exception:
+        # Fallback for Mussel configuration classes that are not registered
+        # as structured OmegaConf dataclasses.
+        mussel_config = OmegaConf.create(tess_config)
+
+    try:
+        tessellate_module.main(mussel_config)
+    except Exception as exc:
         raise RuntimeError(
-            f"Tessellation failed for {wsi_path}\n"
-            f"Expected H5 at: {output_h5_path}"
+            "Mussel tessellation failed.\n"
+            f"Slide: {wsi.resolve()}\n"
+            f"Output directory: {outdir.resolve()}\n"
+            f"Original error: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if not output_h5_path.exists():
+        raise RuntimeError(
+            "Tessellation finished without creating the expected HDF5 "
+            "output.\n"
+            f"Slide: {wsi.resolve()}\n"
+            f"Expected HDF5 file: {output_h5_path.resolve()}"
         )
 
+    n_patches = _count_patch_images(patches_dir)
 
-# ═════════════════════════════════════════════════════════════════════════
+    print("\n  Tessellation completed successfully.")
+    print(f"  Patch images : {n_patches:,}")
+    print(f"  HDF5 output  : {output_h5_path.resolve()}")
+    print(f"  Output folder: {outdir.resolve()}")
+
+    return str(outdir.resolve())
+
+
+# =========================================================================
 # CLI entry point
-# ═════════════════════════════════════════════════════════════════════════
-# Reuses config.py's full CLI (config_from_args) instead of hand-rolling a
-# second parser here. This means tessellate.py automatically gets every
-# PipelineConfig field flag AND --from-json support for free, so it can
-# pick up a config saved earlier via:
-#
-#     python config.py --print-config > run_config.json
-#     python tessellate.py --from-json run_config.json
+# =========================================================================
 
 def main(argv=None) -> None:
+    """
+    Run tessellation using arguments handled by config.py.
+    """
     from config import config_from_args
 
-    cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
+    cfg, _ = config_from_args(argv)
 
     if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
         raise SystemExit(
-            "--wsi-path is required (path to a .svs / .tif slide), "
-            "either directly or via --from-json"
+            "--wsi-path is required. Provide a path to a whole-slide "
+            "image directly or through --from-json."
         )
 
-    run_tessellation(wsi_path=cfg.WSI_PATH, cfg=cfg)
+    run_tessellation(
+        wsi_path=cfg.WSI_PATH,
+        cfg=cfg,
+    )
 
 
 if __name__ == "__main__":

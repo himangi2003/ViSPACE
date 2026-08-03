@@ -2,7 +2,7 @@
 """
 immune_proximity_features.py
 ============================
-Stage 6 of the ViP-SegD pipeline — immune / TIL proximity feature extraction.
+Stage 6 of the ViSpace pipeline — immune / TIL proximity feature extraction.
 
 Reads cluster polygons produced by run_cluster_tils_tsr_score() (stage 5)
 and the segmentation GeoJSON produced by run_stitching() (stage 3).

@@ -1,7 +1,7 @@
 """
 segmenter.py
 ============
-Step 2 of the ViP-SegD pipeline.
+Step 2 of the ViSpace pipeline.
 
 Model definition, checkpoint loading, and per-slide inference.
 
@@ -304,7 +304,6 @@ def load_model(
 
     epoch = ckpt.get("epoch", "?")
     dice  = ckpt.get("metrics", {}).get("macro_dice", "?")
-    print(f"  epoch={epoch}  macro_dice={dice}  device={device}")
 
     dec_params = sum(p.numel() for p in model.decoder.parameters())
     print(f"  Decoder params: {dec_params/1e6:.1f}M")
@@ -691,7 +690,7 @@ def main(argv=None) -> None:
     if not cfg.CHECKPOINT or not Path(cfg.CHECKPOINT).exists():
         raise SystemExit(
             f"--checkpoint not found: {cfg.CHECKPOINT!r}. "
-            f"Pass --checkpoint pointing at your ViP-SegD .pt file, "
+            f"Pass --checkpoint pointing at your ViSpace.pt file, "
             f"either directly or via --from-json."
         )
 

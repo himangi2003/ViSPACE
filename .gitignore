@@ -1,17 +1,21 @@
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
-# Ignore everything
+
+# Ignore everything by default
 *
 
-# But keep gitignore itself
+# Keep gitignore
 !.gitignore
 
-# Keep the TNBC_weights folder and everything inside it
+# Keep this requirements file
+!ViP-SegD_requirements_colab.txt
+
+# Keep TNBC_weights folder
 !TNBC_weights/
 !TNBC_weights/**
 
-# Still ignore TIFF files anywhere, even inside kept folders
+# Ignore TIFF files
 *.tif
 *.tiff
 

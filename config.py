@@ -1,7 +1,7 @@
 """
 config.py
 =========
-Central configuration for the ViP-SegD pipeline.
+Central configuration for the Vispace pipeline.
 
 All paths, hyperparameters, and flags live here.
 Import this in every pipeline script instead of hardcoding values.
@@ -10,13 +10,13 @@ Usage (as a library)
 ---------------------
     from config import cfg, PipelineConfig
     # Use the default singleton
-    from run_vipsegd import run_vipsegd
-    results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg)
+    from run_vispace import run_vispace
+    results = run_vispace("slides/TCGA-A1-A0SP.svs", cfg)
 
     # Override specific fields for a one-off run
     from dataclasses import replace
     cfg2 = replace(cfg, CHECKPOINT="weights/phaseA_best.pt", MPP=0.50)
-    results = run_vipsegd("slides/TCGA-A1-A0SP.svs", cfg2)
+    results = run_vispace("slides/TCGA-A1-A0SP.svs", cfg2)
 
 Usage (from the command line)
 ------------------------------
@@ -37,10 +37,10 @@ have to hand-maintain a second copy of the arguments list.
                       --mpp 0.50 --print-config > run_config.json
 
     # Build a config and actually run the pipeline
-    # (requires run_vipsegd.py to be importable on PYTHONPATH)
+    # (requires run_vispace.py to be importable on PYTHONPATH)
     python config.py --wsi-path slides/TCGA-A1-A0SP.svs \\
                       --checkpoint weights/phaseA_best.pt \\
-                      --out-dir vipsegd_output --run
+                      --out-dir vispace_output --run
 
     # Later: reload a previously saved config and run from it directly
     python config.py --from-json run_config.json --run
@@ -80,13 +80,13 @@ class PipelineConfig:
     """
 
     # ── ✏  REQUIRED — set these before running ─────────────────────────────
-    OUT_DIR:    str = "vipsegd_output"          # root directory for all outputs
-    CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"  # path to ViP-SegD model checkpoint
+    OUT_DIR:    str = "vispace_output"          # root directory for all outputs
+    CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"  # path to Vispace model checkpoint
     WSI_PATH:  str = "your data path"              #  .svs / .tif slides
 
 
     # ── Mussel (tessellation) ───────────────────────────────────────────────
-    MUSSEL_DIR:     str   = "Mussel/"  # cloned Mussel repo root
+    MPP:            float = 0.25                # microns-per-pixel  (40x TCGA)
     PATCH_SIZE:     int   = 224                 # tile edge in pixels
     WORKERS:        int   = 4                   # parallel tiling workers
     SEGMENT_THRESH: int   = 20                  # Otsu tissue-mask threshold
@@ -99,7 +99,6 @@ class PipelineConfig:
     WHITE_THRESH:   int   = 220                 # background pixel threshold
 
     # ── Slide geometry ──────────────────────────────────────────────────────
-    MPP:            float = 0.25                # microns-per-pixel  (40x TCGA)
     STEP_X:         int   = 444                 # WSI tile spacing x (px) — informational
     STEP_Y:         int   = 444                 # WSI tile spacing y (px) — informational
     MAX_PX:         int   = 4096                # max output PNG long edge
@@ -124,7 +123,7 @@ class PipelineConfig:
     #   "stroma_plus_inflammatory"  → Inflammatory / (Stroma + Inflam)
     #   "tissue"                    → Inflammatory / viable tissue
     CLUSTER_BUFFER_UM:           float = 300.0  # buffer around ROI boxes → scoring polygon
-    CLUSTER_MIN_ROI_BOXES:       int   = 5      # min ROI boxes to keep a cluster
+    CLUSTER_MIN_ROI_BOXES:       int   = 1     # min ROI boxes to keep a cluster
     CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0   # minimum GeoJSON polygon area filter
     CLUSTER_MAX_AREA_QUANTILE:   float = 1.0    # upper area quantile filter (1.0 = off)
     CLUSTER_MAX_AREA_MAD_Z:      float = 0.0    # MAD-z outlier rejection (0.0 = off)
@@ -167,11 +166,6 @@ class PipelineConfig:
         default_factory=lambda: {"Tumour", "Tumor", "tumour", "tumor"}
     )
 
-        # ── ✏  When extracting parameters for cohort — set these before running ─────────────────────────────
-    COHORT_DATA_PATH: str = "path to your cohort data"  # 
-    COHORT_META_DATA:  str = "path to your data path"   #  
-    #   Set of class name strings that count as tumour in the segmentation
-    #   GeoJSON.  Extend if your pipeline uses a different naming convention.
 
     # ── Convenience properties (read-only) ─────────────────────────────────
     @property
@@ -343,8 +337,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     flags.
     """
     parser = argparse.ArgumentParser(
-        prog="vipsegd",
-        description="ViP-SegD pipeline — build a PipelineConfig (and optionally run the "
+        prog="vispace",
+        description="Vispace pipeline — build a PipelineConfig (and optionally run the "
                      "pipeline) from the command line.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -355,8 +349,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run", action="store_true",
-        help="After building the config, import run_vipsegd and execute "
-             "run_vipsegd(WSI_PATH, cfg).",
+        help="After building the config, import run_vispace and execute "
+             "run_vispace(WSI_PATH, cfg).",
     )
     parser.add_argument(
         "--from-json", type=str, default=None,
@@ -449,13 +443,13 @@ def main(argv: Optional[list] = None) -> None:
 
     if args.run:
         try:
-            from run_vipsegd import run_vipsegd
+            from run_vispace import run_vispace
         except ImportError as e:
             raise SystemExit(
-                "Could not import run_vipsegd — make sure run_vipsegd.py is on "
+                "Could not import run_vispace — make sure run_vispace.py is on "
                 f"the Python path (same directory or PYTHONPATH). Original error: {e}"
             )
-        results = run_vipsegd(new_cfg.WSI_PATH, new_cfg)
+        results = run_vispace(new_cfg.WSI_PATH, new_cfg)
         print(results)
         return
 

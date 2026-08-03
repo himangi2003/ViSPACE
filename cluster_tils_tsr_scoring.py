@@ -322,11 +322,54 @@ def export_cluster_polygons_geojson(
 # Geometry: dissolve → buffer → non-overlap
 # ---------------------------------------------------------------------------
 
+def _cluster_output_columns() -> list[str]:
+    """Return the schema used by the final cluster DataFrame."""
+    return [
+        "cluster_id",
+        "priority_nonoverlap_assignment",
+        "n_roi_boxes",
+        "roi_ids",
+        "x_min",
+        "y_min",
+        "x_max",
+        "y_max",
+        "cluster_original_union_area_px2",
+        "cluster_expanded_pre_nonoverlap_area_px2",
+        "cluster_scoring_area_px2",
+        "cluster_scoring_perimeter_px",
+        "inter_cluster_overlap_removed_area_px2",
+        "buffer_px",
+        "geometry",
+    ]
+
+
+def _empty_cluster_dataframe() -> pd.DataFrame:
+    """
+    Return an empty cluster DataFrame with the expected output schema.
+
+    This prevents KeyError failures when later code sorts or inspects an
+    empty result.
+    """
+    return pd.DataFrame(columns=_cluster_output_columns())
+
+
 def dissolve_buffer_filter_nonoverlap(
     rois: pd.DataFrame,
     buffer_px: float,
     min_roi_boxes_per_cluster: int,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Dissolve ROI boxes by cluster, buffer them, filter small clusters, and
+    assign non-overlapping scoring polygons.
+
+    Returns
+    -------
+    clusters
+        Final non-overlapping scoring polygons.
+
+    all_clusters
+        All clusters before the minimum-ROI-box filter.
+    """
     raw_records = []
 
     for cid, sub in tqdm(
@@ -335,26 +378,66 @@ def dissolve_buffer_filter_nonoverlap(
         unit="cluster",
     ):
         boxes = [
-            shapely_box(float(r.x_min), float(r.y_min), float(r.x_max), float(r.y_max))
+            shapely_box(
+                float(r.x_min),
+                float(r.y_min),
+                float(r.x_max),
+                float(r.y_max),
+            )
             for r in sub.itertuples()
         ]
+
         orig = make_valid(unary_union(boxes))
-        exp  = make_valid(orig.buffer(buffer_px, join_style=1)) if buffer_px > 0 else orig
+        exp = (
+            make_valid(orig.buffer(buffer_px, join_style=1))
+            if buffer_px > 0
+            else orig
+        )
+
         raw_records.append({
-            "cluster_id":                               int(cid),
-            "n_roi_boxes":                              int(len(sub)),
-            "roi_ids":                                  ";".join(map(str, sub["roi_id"].tolist())),
-            "cluster_original_union_area_px2":          float(orig.area),
+            "cluster_id": int(cid),
+            "n_roi_boxes": int(len(sub)),
+            "roi_ids": ";".join(map(str, sub["roi_id"].tolist())),
+            "cluster_original_union_area_px2": float(orig.area),
             "cluster_expanded_pre_nonoverlap_area_px2": float(exp.area),
-            "buffer_px":                                float(buffer_px),
-            "geometry_original":                        orig,
-            "geometry_expanded":                        exp,
-            "kept_after_min_roi_filter":                bool(len(sub) >= min_roi_boxes_per_cluster),
+            "buffer_px": float(buffer_px),
+            "geometry_original": orig,
+            "geometry_expanded": exp,
+            "kept_after_min_roi_filter": bool(
+                len(sub) >= min_roi_boxes_per_cluster
+            ),
         })
 
-    all_clusters = pd.DataFrame(raw_records)
+    all_cluster_columns = [
+        "cluster_id",
+        "n_roi_boxes",
+        "roi_ids",
+        "cluster_original_union_area_px2",
+        "cluster_expanded_pre_nonoverlap_area_px2",
+        "buffer_px",
+        "geometry_original",
+        "geometry_expanded",
+        "kept_after_min_roi_filter",
+    ]
+
+    all_clusters = pd.DataFrame(
+        raw_records,
+        columns=all_cluster_columns,
+    )
+
+    if all_clusters.empty:
+        clusters = _empty_cluster_dataframe()
+        clusters.attrs["n_area_intersections"] = 0
+        clusters.attrs["max_pairwise_intersection_area"] = 0.0
+        clusters.attrs["min_roi_boxes_per_cluster"] = int(
+            min_roi_boxes_per_cluster
+        )
+        return clusters, all_clusters
+
     retained = (
-        all_clusters[all_clusters["kept_after_min_roi_filter"]]
+        all_clusters.loc[
+            all_clusters["kept_after_min_roi_filter"]
+        ]
         .copy()
         .sort_values(
             ["cluster_original_union_area_px2", "cluster_id"],
@@ -363,55 +446,113 @@ def dissolve_buffer_filter_nonoverlap(
         .reset_index(drop=True)
     )
 
-    assigned: list = []
-    final_records  = []
-    for priority, row in enumerate(retained.itertuples(), start=1):
-        geom = row.geometry_expanded
+    if retained.empty:
+        counts = (
+            all_clusters[["cluster_id", "n_roi_boxes"]]
+            .sort_values("cluster_id")
+            .to_dict("records")
+        )
+        log.warning(
+            "No clusters passed min_roi_boxes_per_cluster=%d. "
+            "Observed cluster counts: %s",
+            min_roi_boxes_per_cluster,
+            counts,
+        )
+
+        clusters = _empty_cluster_dataframe()
+        clusters.attrs["n_area_intersections"] = 0
+        clusters.attrs["max_pairwise_intersection_area"] = 0.0
+        clusters.attrs["min_roi_boxes_per_cluster"] = int(
+            min_roi_boxes_per_cluster
+        )
+
+        return (
+            clusters,
+            all_clusters.sort_values("cluster_id").reset_index(drop=True),
+        )
+
+    assigned = []
+    final_records = []
+
+    for priority, row in enumerate(
+        retained.itertuples(),
+        start=1,
+    ):
+        geom = make_valid(row.geometry_expanded)
+
         if assigned:
-            geom = make_valid(geom.difference(unary_union(assigned)))
+            occupied = make_valid(unary_union(assigned))
+            geom = make_valid(geom.difference(occupied))
+
         if geom.is_empty or geom.area <= 0:
             log.warning(
-                "Cluster %d swallowed by higher-priority clusters — skipped.",
+                "Cluster %d was fully removed by higher-priority "
+                "non-overlap assignment and was skipped.",
                 row.cluster_id,
             )
             continue
+
         assigned.append(geom)
         minx, miny, maxx, maxy = geom.bounds
+
         final_records.append({
-            "cluster_id":                               int(row.cluster_id),
-            "priority_nonoverlap_assignment":           int(priority),
-            "n_roi_boxes":                              int(row.n_roi_boxes),
-            "roi_ids":                                  row.roi_ids,
-            "x_min": float(minx), "y_min": float(miny),
-            "x_max": float(maxx), "y_max": float(maxy),
-            "cluster_original_union_area_px2":          float(row.cluster_original_union_area_px2),
-            "cluster_expanded_pre_nonoverlap_area_px2": float(row.cluster_expanded_pre_nonoverlap_area_px2),
-            "cluster_scoring_area_px2":                 float(geom.area),
-            "cluster_scoring_perimeter_px":             float(geom.length),
-            "inter_cluster_overlap_removed_area_px2":   max(
-                0.0, float(row.cluster_expanded_pre_nonoverlap_area_px2 - geom.area)
+            "cluster_id": int(row.cluster_id),
+            "priority_nonoverlap_assignment": int(priority),
+            "n_roi_boxes": int(row.n_roi_boxes),
+            "roi_ids": row.roi_ids,
+            "x_min": float(minx),
+            "y_min": float(miny),
+            "x_max": float(maxx),
+            "y_max": float(maxy),
+            "cluster_original_union_area_px2": float(
+                row.cluster_original_union_area_px2
             ),
-            "buffer_px":                                float(row.buffer_px),
-            "geometry":                                 geom,
+            "cluster_expanded_pre_nonoverlap_area_px2": float(
+                row.cluster_expanded_pre_nonoverlap_area_px2
+            ),
+            "cluster_scoring_area_px2": float(geom.area),
+            "cluster_scoring_perimeter_px": float(geom.length),
+            "inter_cluster_overlap_removed_area_px2": max(
+                0.0,
+                float(
+                    row.cluster_expanded_pre_nonoverlap_area_px2
+                    - geom.area
+                ),
+            ),
+            "buffer_px": float(row.buffer_px),
+            "geometry": geom,
         })
 
-    clusters = pd.DataFrame(final_records)
+    clusters = pd.DataFrame(
+        final_records,
+        columns=_cluster_output_columns(),
+    )
 
-    # Sanity-check: measure residual pairwise overlap
-    n_inter, max_inter = 0, 0.0
+    n_intersections = 0
+    max_intersection_area = 0.0
+
     for i in range(len(clusters)):
         for j in range(i + 1, len(clusters)):
-            a = float(
+            intersection_area = float(
                 clusters.iloc[i]["geometry"]
-                .intersection(clusters.iloc[j]["geometry"]).area
+                .intersection(clusters.iloc[j]["geometry"])
+                .area
             )
-            if a > 1e-6:
-                n_inter  += 1
-                max_inter = max(max_inter, a)
 
-    clusters.attrs["n_area_intersections"]           = int(n_inter)
-    clusters.attrs["max_pairwise_intersection_area"] = float(max_inter)
-    clusters.attrs["min_roi_boxes_per_cluster"]      = int(min_roi_boxes_per_cluster)
+            if intersection_area > 1e-6:
+                n_intersections += 1
+                max_intersection_area = max(
+                    max_intersection_area,
+                    intersection_area,
+                )
+
+    clusters.attrs["n_area_intersections"] = int(n_intersections)
+    clusters.attrs["max_pairwise_intersection_area"] = float(
+        max_intersection_area
+    )
+    clusters.attrs["min_roi_boxes_per_cluster"] = int(
+        min_roi_boxes_per_cluster
+    )
 
     return (
         clusters.sort_values("cluster_id").reset_index(drop=True),
@@ -919,8 +1060,23 @@ def _run_scoring(scoring_cfg: _ScoringConfig) -> dict:
         min_roi_boxes_per_cluster=scoring_cfg.min_roi_boxes_per_cluster,
     )
     if clusters.empty:
+        cluster_counts = (
+            all_pre[["cluster_id", "n_roi_boxes"]]
+            .sort_values("cluster_id")
+            .to_dict("records")
+            if not all_pre.empty
+            else []
+        )
+
         raise RuntimeError(
-            "No clusters remained after filtering / non-overlap clipping."
+            "No clusters remained for TSR/sTILs scoring.\n"
+            f"Minimum ROI boxes required per cluster: "
+            f"{scoring_cfg.min_roi_boxes_per_cluster}\n"
+            f"Observed cluster ROI counts: {cluster_counts}\n\n"
+            "Possible fixes:\n"
+            "  1. Reduce CLUSTER_MIN_ROI_BOXES in config.py.\n"
+            "  2. Check tumor_roi_boxes.csv for valid cluster_id values.\n"
+            "  3. Reduce CLUSTER_BUFFER_UM if clusters strongly overlap."
         )
 
     cluster_geojson = scoring_cfg.outdir / "cluster_scoring_polygons.geojson"

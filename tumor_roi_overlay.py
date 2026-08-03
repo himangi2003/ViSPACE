@@ -2,7 +2,7 @@
 """
 tumor_roi_overlay.py
 ====================
-Step 5 of the ViP-SegD pipeline (Step 1 of the spatial-analysis stage).
+Step 5 of the ViSpace pipeline (Step 1 of the spatial-analysis stage).
 
 Clusters tumor tiles into spatially-connected clumps, builds non-overlapping
 ROI boxes of a chosen physical size, and renders overlay visualisations.

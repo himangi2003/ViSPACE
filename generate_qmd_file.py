@@ -102,7 +102,7 @@ def replace_parameter_cell(qmd_text: str, parameter_cell: str) -> str:
 def generate_report(
     wsi_path: str,
     cfg: Optional[PipelineConfig] = None,
-    template_qmd: str = "vipsegd_report_template.qmd",
+    template_qmd: str = "vispace_report_template.qmd",
     output_qmd: Optional[str] = None,
 ) -> Path:
     """
@@ -115,7 +115,7 @@ def generate_report(
     if cfg is None:
         cfg = PipelineConfig()
 
-    out_dir = getattr(cfg, "OUT_DIR", "") or "vipsegd_output"
+    out_dir = getattr(cfg, "OUT_DIR", "") or "vispace_output"
 
     template_path = Path(template_qmd)
     qmd_text = template_path.read_text(encoding="utf-8")
@@ -136,7 +136,7 @@ def generate_report(
     slide_name = Path(wsi_path).stem
 
     if output_qmd is None:
-        output_qmd = "vipsegd_report_slide.qmd"
+        output_qmd = "vispace_report_slide.qmd"
 
     output_path = Path(output_qmd)
     output_path.write_text(qmd_text, encoding="utf-8")

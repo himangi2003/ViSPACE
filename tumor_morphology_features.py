@@ -2,7 +2,7 @@
 """
 tumor_morphology_features.py
 ============================
-Stage 8 of the ViP-SegD pipeline — tumour morphology feature extraction.
+Stage 8 of the ViSpace pipeline — tumour morphology feature extraction.
 
 Reads cluster polygons produced by run_cluster_tils_tsr_score() (stage 5)
 and the segmentation GeoJSON produced by run_stitching() (stage 3).

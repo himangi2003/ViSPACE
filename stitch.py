@@ -1,7 +1,7 @@
 """
 stitch.py
 =========
-Step 3 of the ViP-SegD pipeline — runs after segmenter.py.
+Step 3 of the ViSpace pipeline — runs after segmenter.py.
 
 Stitches per-tile .npy segmentation masks into a single gap-free canvas,
 then produces:
@@ -636,7 +636,7 @@ def run_stitching(
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog="stitch.py",
-        description="Step 3 of the ViP-SegD pipeline — stitch per-tile "
+        description="Step 3 of the ViSpace pipeline — stitch per-tile "
                      "segmentation into a WSI-level canvas + GeoJSON.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )

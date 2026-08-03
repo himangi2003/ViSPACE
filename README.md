@@ -1,14 +1,14 @@
-# ViP-SegD — Virchow2-Powered Segmentation & Spatial Feature Pipeline
+# ViSPACE — Virchow2-Powered Segmentation & Spatial Feature Pipeline
 
-ViP-SegD is an end-to-end computational pathology pipeline for whole-slide image (WSI) analysis. It combines the Virchow2 Vision Transformer encoder with a pixel-wise decoder to produce five-class tissue segmentation maps, then extracts rich spatial features from the tumour microenvironment (TME).
+ViSPACE is an end-to-end computational pathology pipeline for whole-slide image (WSI) analysis. It combines the Virchow2 Vision Transformer encoder with a pixel-wise decoder to produce five-class tissue segmentation maps, then extracts rich spatial features from the tumour microenvironment (TME).
 
 <p align="center">
-  <img src="ViP-SegD_workflow.png" alt="ViP-SegD pipeline architecture" width="800"><br>
+  <img src="ViP-Space_workflow.png" alt="ViSPACE pipeline architecture" width="800"><br>
   <em>Detailed pipeline architecture — tessellation through spatial feature extraction</em>
 </p>
 
 <p align="center">
-  <img src="workflow2.png" alt="ViP-SegD high-level workflow" width="800"><br>
+  <img src="workflow2.png" alt="ViSPACE high-level workflow" width="800"><br>
   <em>High-level workflow overview</em>
 </p>
 
@@ -51,42 +51,14 @@ pip install -q -r requirements-colab.txt
 
 `requirements-colab.txt` mirrors `ViP-SegD_environment.yml`'s pip packages, minus Quarto (not pip-installable) and the local Jupyter stack (Colab already provides its own — see the comments inside that file before uncommenting those lines).
 
-### 2. Clone Mussel (tessellation backend)
 
-ViP-SegD's tessellation stage depends on [Mussel](https://github.com/pathology-data-mining/Mussel), an open-source WSI tiling library. Clone it into your project directory:
-
-```bash
-git clone https://github.com/pathology-data-mining/Mussel.git Mussel
-```
-
-Your project layout should look like:
-
-```
-ViP-SegD/
-├── Mussel/              ← MUSSEL_DIR points here
-├── tessellate.py
-├── config.py
-├── run_vipsegd.py
-├── TNBC_weights/
-│   └── TNBC_best.pt
-└── ...
-```
-
-Then point `config.py` at it — either edit the `MUSSEL_DIR` default directly, or pass it at the CLI/config-build step (see [Quick Start](#quick-start)):
-
-```python
-MUSSEL_DIR: str = "Mussel/"   # ✏ path to the cloned Mussel repo root
-```
-
-> `tessellate.py` inserts `cfg.MUSSEL_DIR` into `sys.path` at call time, so Mussel does **not** need to be installed globally — pointing `MUSSEL_DIR` at the downloaded folder is sufficient.
-
-### 3. Download model weights
+### 2. Download model weights
 
 Download the ViP-SegD checkpoint and place it at the path you'll set as `CHECKPOINT` (e.g. `TNBC_weights/TNBC_best.pt`).
 
 Virchow2 encoder weights are fetched automatically from the HuggingFace Hub unless `VIRCHOW2_PATH` is set to a local directory — see the next section for the auth this requires.
 
-### 4. HuggingFace account & access token
+### 3. HuggingFace account & access token
 
 Virchow2 is a **gated model** — you need a HuggingFace account and access token before the weights can be downloaded (skip this entirely if you set `VIRCHOW2_PATH` to local weights instead).
 
@@ -290,15 +262,7 @@ python tumor_morphology_features.py --from-json run_config.json
 python tumor_morphology_features.py --from-json run_config.json --morphology-min-island-area-um2 500
 ```
 
-### 4. Generate the HTML report
 
-```bash
-python report/generate_report.py --from-json run_config.json
-
-python report/generate_report.py --from-json run_config.json \
-    --author "Dr. J. Smith" \
-    --notes "TNBC, pre-treatment biopsy"
-```
 
 ### Full command reference table
 
