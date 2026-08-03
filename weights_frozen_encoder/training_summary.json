@@ -1,0 +1,129 @@
+{
+  "best_checkpoint": "weights_frozen_encoder/TNBC_best.pt",
+  "best_selection_score": 0.7395556202953356,
+  "final_val_loss": 0.5371589448274643,
+  "final_val_metrics": {
+    "Tumour": {
+      "dice": 0.8447660871074176,
+      "iou": 0.7312511151894887,
+      "tp": 78481387,
+      "fp": 21001449,
+      "fn": 7841974
+    },
+    "Stroma": {
+      "dice": 0.7346794132137909,
+      "iou": 0.580627092363845,
+      "tp": 55220744,
+      "fp": 11124640,
+      "fn": 28759968
+    },
+    "Inflammatory": {
+      "dice": 0.7792258912828358,
+      "iou": 0.6383047328073465,
+      "tp": 31675513,
+      "fp": 12003381,
+      "fn": 5945543
+    },
+    "Necrosis": {
+      "dice": 0.7639396859568071,
+      "iou": 0.6180440204070107,
+      "tp": 7860515,
+      "fp": 2674572,
+      "fn": 2183287
+    },
+    "Others": {
+      "dice": 0.5751670239158266,
+      "iou": 0.4036732961476939,
+      "tp": 3811916,
+      "fp": 1778943,
+      "fn": 3852213
+    },
+    "macro_dice": 0.7395556202953356,
+    "macro_iou": 0.5943800513830769
+  },
+  "final_test_loss": 0.4549087233751083,
+  "final_test_metrics": {
+    "Tumour": {
+      "dice": 0.8866719604189439,
+      "iou": 0.7964157273471684,
+      "tp": 123109795,
+      "fp": 19815280,
+      "fn": 11654739
+    },
+    "Stroma": {
+      "dice": 0.7878638929858643,
+      "iou": 0.6499797245761579,
+      "tp": 85809956,
+      "fp": 17902844,
+      "fn": 28306635
+    },
+    "Inflammatory": {
+      "dice": 0.7948644472924885,
+      "iou": 0.6595643498415681,
+      "tp": 47710353,
+      "fp": 12626104,
+      "fn": 11999704
+    },
+    "Necrosis": {
+      "dice": 0.753328989171001,
+      "iou": 0.6042724845828088,
+      "tp": 11217431,
+      "fp": 4683282,
+      "fn": 2662818
+    },
+    "Others": {
+      "dice": 0.6828983981021004,
+      "iou": 0.5184857395344948,
+      "tp": 4694906,
+      "fp": 1978257,
+      "fn": 2381871
+    },
+    "macro_dice": 0.7811255375940795,
+    "macro_iou": 0.6457436051764397
+  },
+  "args": {
+    "train_dir": "fine_tuning/tiles_bcss/train",
+    "val_dir": "fine_tuning/tiles_bcss/val",
+    "test_dir": "fine_tuning/tiles_bcss/test",
+    "output_dir": "weights_frozen_encoder",
+    "model_path": null,
+    "best_name": "TNBC_best.pt",
+    "batch_size": 20,
+    "num_workers": 4,
+    "epochs": 40,
+    "patience": 8,
+    "lr": 0.0001,
+    "eta_min": 1e-06,
+    "weight_decay": 0.0001,
+    "seed": 42,
+    "ce_weight": 0.4,
+    "dice_weight": 0.6,
+    "ce_class_weights": [
+      0.5,
+      0.55,
+      1.0,
+      1.41,
+      2.45
+    ],
+    "auto_ce_weights": false,
+    "min_ce_weight": 0.5,
+    "max_ce_weight": 3.0,
+    "batch_random_fraction": 0.5,
+    "batch_inflammatory_fraction": 0.2,
+    "batch_necrosis_fraction": 0.15,
+    "batch_other_fraction": 0.15,
+    "inflammatory_rich_threshold": 0.03,
+    "necrosis_rich_threshold": 0.02,
+    "other_rich_threshold": 0.01,
+    "epoch_size_factor": 1.0,
+    "no_balanced_batches": false,
+    "color_aug_prob": 0.65,
+    "degradation_aug_prob": 0.25,
+    "min_tumor_dice": 0.8,
+    "min_stroma_dice": 0.65,
+    "majority_penalty": 0.5,
+    "dice_ema_alpha": 1.0,
+    "no_amp": false,
+    "no_label_check": false
+  }
+}

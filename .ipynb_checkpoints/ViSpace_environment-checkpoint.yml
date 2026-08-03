@@ -1,0 +1,83 @@
+# ViSpace Conda Environment
+# Virchow2-Powered Segmentation & Spatial Feature Pipeline
+# Python 3.11 | CUDA 12.1 | PyTorch 2.5.1
+#
+# Create:   conda env create -f ViSpace_environment.yml
+# Activate: conda activate vispace
+# Update:   conda env update -f ViSpace_environment.yml --prune
+#
+# Miniforge users: use conda (not mamba) as requested
+#   conda env create -f ViSpace_environment.yml
+
+name: vispace
+
+channels:
+  - conda-forge
+  - nodefaults       # avoids Anaconda default channel conflicts + licensing
+
+dependencies:
+  - python=3.11
+  - pip
+
+  # ── Quarto (report generation) ───────────────────────────────────────────
+  # Installed via conda-forge to avoid pip/system conflicts
+  - quarto
+
+  - pip:
+    # ── PyTorch (CUDA 12.1) ──────────────────────────────────────────────────
+    - --extra-index-url https://download.pytorch.org/whl/cu121
+    - torch==2.5.1+cu121
+    - torchvision==0.20.1+cu121
+
+    # ── Virchow2 encoder ─────────────────────────────────────────────────────
+    - timm==1.0.17
+    - huggingface-hub[cli]==0.33.4
+    - safetensors==0.5.3
+    - transformers==4.45.2
+    - ml_dtypes
+    - open_clip_torch
+
+    # ── Mussel (tessellation) ────────────────────────────────────────────────
+    # PyPI release pinned for reproducibility
+    - mussel-pathology[torch-gpu]==1.4.3
+    - omegaconf==2.3.0
+    - hydra-core==1.3.2
+    - h5py==3.14.0
+    - tiffslide==2.5.1
+    - tifffile==2025.5.10
+    - imagecodecs==2025.3.30
+    - einops==0.8.1
+    - openslide-python==1.4.1
+    - openslide-bin           # bundles the compiled OpenSlide shared library — avoids needing a separate system install. See https://openslide.org/api/python/#installing
+
+    # ── Image processing (segmentation + stitching) ──────────────────────────
+    - opencv-python-headless==4.12.0.88
+    - pillow==11.3.0
+    - numpy==2.2.6
+    - scikit-image==0.25.2
+
+    # ── Data handling ────────────────────────────────────────────────────────
+    - pandas==2.3.1
+    - tqdm==4.67.1
+
+    # ── Spatial / GeoJSON (TME feature extraction) ───────────────────────────
+    - geopandas==1.1.1
+    - shapely==2.1.1
+    - pyogrio==0.11.0
+    - pyproj==3.7.1
+    - scipy==1.16.0
+
+    # ── Visualisation ────────────────────────────────────────────────────────
+    - matplotlib==3.10.3
+    - seaborn==0.13.2
+
+    # ── Jupyter (pinned as a coherent stack to avoid server conflicts) ────────
+    # All four must be pinned together — mismatches cause kernel/server errors.
+    # Do NOT install jupyterlab via pip if conda-forge jupyter is also present.
+    - jupyterlab==4.3.6
+    - jupyter_server==2.14.2
+    - ipykernel==6.29.5
+    - ipywidgets==8.1.5
+    # Quarto requires these exact versions to execute .qmd notebooks
+    - nbformat==5.10.4
+    - nbclient==0.10.2

@@ -1,0 +1,332 @@
+/*-----------------------------------------------------------------------------
+  ViP-SegD Pathology Report — theme
+  Layered on Bootswatch "cosmo". Load with:
+      theme: [cosmo, vipsegd_report_style.scss]
+
+  Everything is token-driven: edit the variables under :root once and the whole
+  report (cards, chips, scales, badges) follows. Dynamic values (scale-fill
+  widths, data-driven badge colours) are still computed inline in the .qmd —
+  only the static look-and-feel lives here.
+-----------------------------------------------------------------------------*/
+
+/*-- scss:defaults --*/
+
+// Override cosmo/Bootstrap so the whole document sits on a light surface.
+$body-bg:        #f7f9fc !default;
+$body-color:     #1f2733 !default;
+$link-color:     #2f6db0 !default;
+$font-size-root: 16px !default;
+
+/*-- scss:rules --*/
+
+:root {
+  /* ---- histology class palette (the report's real vocabulary) ---- */
+  --c-tumour:        #e31a1c;
+  --c-stroma:        #33a02c;
+  --c-inflammatory:  #1f78b4;
+  --c-necrosis:      #ff9f1c;
+  --c-others:        #b54cc8;
+
+  /* ---- neutral / surface palette (light) ---- */
+  --ink:        #1f2733;   /* primary text            */
+  --ink-soft:   #5b6678;   /* secondary text / labels */
+  --ink-faint:  #8a95a6;   /* captions                */
+  --line:       #e3e9f2;   /* hairline borders        */
+  --line-soft:  #eef2f8;
+  --page-bg:    #f7f9fc;   /* page background         */
+  --card-bg:    #ffffff;   /* card / chip surface     */
+  --card-bg-2:  #f6f9fc;   /* tinted panels           */
+  --accent:     #2f6db0;   /* primary accent (clinical blue) */
+  --accent-2:   #1b4a7a;
+
+  /* ---- shape + rhythm ---- */
+  --radius:     14px;
+  --radius-sm:  10px;
+  --shadow:     0 1px 2px rgba(20,38,66,.06), 0 6px 20px rgba(20,38,66,.05);
+  --shadow-sm:  0 1px 2px rgba(20,38,66,.06);
+  --gap:        14px;
+
+  /* ---- type ---- */
+  --font-body: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-head: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+body {
+  background: var(--page-bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-head);
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+h1 { font-weight: 700; }
+h2 { font-weight: 650; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- report meta strip (top pills) ------------------------------------- */
+.report-meta {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  margin: 6px 0 4px;
+}
+.meta-pill {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  box-shadow: var(--shadow-sm);
+}
+.meta-pill strong { color: var(--ink); font-weight: 650; }
+
+/* ---- section hero ------------------------------------------------------ */
+.section-hero {
+  background: linear-gradient(180deg, var(--card-bg) 0%, var(--card-bg-2) 100%);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  margin: 10px 0 20px;
+  box-shadow: var(--shadow-sm);
+}
+.section-kicker {
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.section-title {
+  font-size: 21px;
+  font-weight: 680;
+  margin-top: 4px;
+  color: var(--ink);
+}
+.section-copy {
+  margin-top: 6px;
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  line-height: 1.55;
+  max-width: 78ch;
+}
+
+/* ---- metric cards ------------------------------------------------------ */
+.vb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--gap);
+  margin: 6px 0 8px;
+}
+.vb {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+}
+.vb-t {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.vb-v {
+  font-size: 27px;
+  font-weight: 720;
+  color: var(--ink);
+  margin: 6px 0 2px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.vb-s { font-size: 12.5px; color: var(--ink-faint); }
+
+/* ---- per-cluster chips ------------------------------------------------- */
+.chip-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  margin: 4px 0;
+}
+.chip {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.chip-id {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent-2);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+  width: 100%;
+}
+.chip-line {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 2px 0; font-size: 13px;
+}
+.chip-line .k { color: var(--ink-soft); }
+.chip-line .v { color: var(--ink); font-weight: 640; font-variant-numeric: tabular-nums; }
+
+/* ---- badges ------------------------------------------------------------ */
+.badge {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: .01em;
+  /* keep light pastel badges legible: subtle inner outline */
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.06);
+  text-shadow: 0 1px 1px rgba(0,0,0,.18);
+}
+.legend-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+
+/* ---- scale reference --------------------------------------------------- */
+.scale-wrap { display: grid; gap: 16px; margin: 6px 0; }
+.scale-row {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  box-shadow: var(--shadow-sm);
+}
+.scale-head { display: flex; justify-content: space-between; align-items: baseline; }
+.scale-name { font-weight: 640; color: var(--ink); font-size: 14px; }
+.scale-val {
+  font-weight: 720; color: var(--accent-2);
+  font-variant-numeric: tabular-nums; font-size: 15px;
+}
+.scale-track {
+  position: relative; height: 8px; margin: 10px 0 8px;
+  background: var(--line-soft); border-radius: 999px;
+}
+.scale-fill {
+  position: absolute; left: 0; top: 0; height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+  border-radius: 999px;
+}
+.scale-marker {
+  position: absolute; top: 50%; width: 13px; height: 13px;
+  background: #fff; border: 3px solid var(--accent-2);
+  border-radius: 50%; transform: translate(-50%, -50%);
+  box-shadow: 0 1px 3px rgba(20,38,66,.25);
+}
+.scale-ends {
+  display: flex; justify-content: space-between;
+  font-size: 11.5px; color: var(--ink-faint);
+}
+.scale-blurb { margin-top: 6px; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+
+/* ---- reference boxes --------------------------------------------------- */
+.ref-box {
+  background: var(--card-bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
+  margin: 14px 0;
+}
+.ref-title {
+  font-weight: 680; color: var(--ink); font-size: 13.5px;
+  margin-bottom: 6px;
+}
+.ref-list { margin: 0; padding-left: 18px; }
+.ref-list li { color: var(--ink-soft); font-size: 13px; line-height: 1.6; margin: 3px 0; }
+
+/* ---- images ------------------------------------------------------------ */
+.report-img-wrap { margin: 8px 0 4px; text-align: center; }
+.report-img {
+  max-width: 100%; height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.img-note {
+  font-size: 11.5px; color: var(--ink-faint);
+  margin-top: 6px; text-align: center;
+}
+
+/* ---- charts ------------------------------------------------------------ */
+.chart-block { margin: 8px 0; }
+.chart-cap {
+  font-size: 12.5px; color: var(--ink-soft);
+  text-align: center; margin: 2px 0 10px;
+}
+
+.note-foot {
+  margin-top: 28px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint); font-size: 12px; text-align: right;
+}
+
+/* =========================================================================
+   PRINT / PDF  (weasyprint or browser "Print to PDF")
+   Keeps the light look, forces colours to print, expands tabsets, and
+   avoids slicing cards across pages.
+   ========================================================================= */
+@media print {
+
+  /* make browsers/weasyprint keep our background colours */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body { background: #ffffff !important; }
+
+  /* hide the interactive chrome that has no meaning on paper */
+  #quarto-sidebar, .sidebar, #TOC, #quarto-margin-sidebar,
+  .margin-sidebar, .nav-page, .quarto-title-tools,
+  #quarto-back-to-top, .code-tools-button, button.code-tools-button {
+    display: none !important;
+  }
+
+  /* use the full page width once the sidebar is gone */
+  #quarto-content, main.content, .page-columns, .content {
+    margin: 0 !important;
+    max-width: 100% !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  /* --- expand tabsets: on paper, show every panel, not just the active one --- */
+  .panel-tabset .tab-content > .tab-pane {
+    display: block !important;
+    opacity: 1 !important;
+    margin-bottom: 10px;
+  }
+  /* keep the tab labels visible as a header row so panels stay identifiable */
+  .panel-tabset > .nav-tabs { display: flex !important; }
+  .panel-tabset > .nav-tabs .nav-link {
+    border: none !important;
+    color: var(--ink-soft) !important;
+    font-weight: 600;
+  }
+
+  /* page-break behaviour */
+  h1 { break-before: page; }
+  h1:first-of-type { break-before: avoid; }
+  .section-hero, .vb, .chip, .scale-row, .ref-box,
+  .report-img-wrap, .chart-block, table {
+    break-inside: avoid;
+  }
+
+  /* running page furniture */
+  @page {
+    size: A4;
+    margin: 16mm 14mm 18mm 14mm;
+    @bottom-right { content: counter(page); color: #8a95a6; font-size: 10px; }
+  }
+}
