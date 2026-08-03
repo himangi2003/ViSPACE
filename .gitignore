@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+**/__pycache__/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Pipeline output directories
+**/*output/
+**/*results/
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
