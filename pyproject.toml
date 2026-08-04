@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vispace"
+dynamic = ["version"]
+description = "Virchow2 powered Spatial Characterization And feature Extraction pipeline for whole-slide images"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "ViSPACE authors" },  # TODO: replace with real author name(s)
+]
+keywords = [
+    "computational-pathology",
+    "whole-slide-imaging",
+    "digital-pathology",
+    "tumor-microenvironment",
+    "segmentation",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+# Pins translated verbatim from ViSpace_requirements_colab.txt.
+# NOTE: torch/torchvision are pinned WITHOUT the "+cu121" local version tag so
+# that `pip install .` resolves from the default index. For a CUDA 12.1 build,
+# install torch first from the PyTorch index, e.g.:
+#     pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
+#         --extra-index-url https://download.pytorch.org/whl/cu121
+# then `pip install .` (pip will keep the already-satisfied CUDA build).
+dependencies = [
+    # Deep learning
+    "torch==2.5.1",
+    "torchvision==0.20.1",
+
+    # Virchow2 encoder
+    "timm==1.0.17",
+    "huggingface-hub[cli]==0.33.4",
+    "safetensors==0.5.3",
+    "transformers==4.45.2",
+    "ml_dtypes",
+    "open_clip_torch",
+
+    # Mussel tessellation
+    "mussel-pathology[torch-gpu]==1.4.4",
+    "omegaconf==2.3.0",
+    "hydra-core==1.3.2",
+    "h5py==3.14.0",
+    "tiffslide==2.5.1",
+    "tifffile==2025.5.10",
+    "imagecodecs==2025.3.30",
+    "einops==0.8.1",
+    "openslide-python==1.4.1",
+    "openslide-bin",
+
+    # Image processing
+    "opencv-python-headless==4.12.0.88",
+    "pillow==11.3.0",
+    "numpy==2.2.6",
+    "scikit-image==0.25.2",
+
+    # Data handling
+    "pandas==2.2.2",
+    "tqdm==4.67.1",
+
+    # Spatial and GeoJSON
+    "geopandas==1.1.1",
+    "shapely==2.1.1",
+    "pyogrio==0.11.0",
+    "pyproj==3.7.1",
+    "scipy==1.16.0",
+
+    # Visualisation
+    "matplotlib==3.10.3",
+    "seaborn==0.13.2",
+]
+
+[project.scripts]
+vispace = "vispace.run_vispace:main"
+vispace-check = "vispace.environment_check:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "vispace.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vispace = ["assets/**/*"]
