@@ -2,6 +2,12 @@
 __pycache__/
 **/__pycache__/
 
+# Packaging build artifacts
+build/
+dist/
+*.egg-info/
+**/*.egg-info/
+
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
