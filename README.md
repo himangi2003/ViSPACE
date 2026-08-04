@@ -134,9 +134,11 @@ See **Chapter 1** of the User Manual for complete installation instructions.
 
 ---
 
-# Hugging Face Authentication
+# Hugging Face Authentication and Virchow 2 access
 
 Virchow2 is a **gated model** — you need a HuggingFace account and access token before the weights can be downloaded (skip this entirely if you set `VIRCHOW2_PATH` to local weights instead).
+
+Request access at <https://huggingface.co/paige-ai/Virchow2>
 
 Authenticate once using
 
@@ -175,11 +177,11 @@ print("HF_TOKEN environment variable set.")
 Alternatively, local Virchow2 weights can be specified using
 `VIRCHOW2_PATH`.
 
-Complete instructions are provided in **Chapter 1** of the User Manual.
+Complete instructions are provided in **Chapter 1** of the Vispace User Manual in docs.
 
 ---
 
-# Environment Check
+# Environment Check (Optional)
 
 Before processing any slide, verify the installation with the `vispace-check`
 console command (installed with the package):
