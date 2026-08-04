@@ -3,7 +3,7 @@ title: "ViP-SegD Pathology Report"
 subtitle: "Whole-Slide Tissue Segmentation & Tumour Microenvironment Analysis"
 format:
   html:
-    theme: [cosmo, vipsegd_report_style.scss]
+    theme: [cosmo, vipspace_report_style.scss]
     toc: true
     toc-depth: 3
     toc-title: "Contents"
@@ -27,7 +27,7 @@ execute:
 
 <!--
   PDF: this report is HTML-first because its cards/chips/scales/tabsets are raw
-  HTML styled by vipsegd_report_style.scss, which LaTeX would discard. The PDF
+  HTML styled by vipspace_report_style.scss, which LaTeX would discard. The PDF
   is produced by *printing this HTML* (weasyprint or a browser), driven by
   generate_report.py. The .scss @media print block handles page breaks and
   expands tabsets so every panel appears on paper. When rendering for PDF the

@@ -472,4 +472,4 @@ If you use Vispace in your research, please cite the associated publication (for
 
 ## License
 
-See `LICENSE` for terms of use.
+ViSPACE is released under the Apache License 2.0. See `LICENSE` for the full terms.
