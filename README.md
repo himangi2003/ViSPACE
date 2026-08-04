@@ -82,18 +82,47 @@ ViSPACE was developed and tested using
 
 ## Prerequisites
 
+Python **3.11** and, for GPU inference, an NVIDIA GPU with CUDA 12.1 (see
+[Recommended System Requirements](#recommended-system-requirements)).
+
 # Installation
 
+ViSPACE is a pip-installable package. Any of the options below installs the
+`vispace` package plus two console commands — `vispace` (run the pipeline) and
+`vispace-check` (validate the environment).
+
+### Option A — install from source *(recommended)*
+
+```bash
+git clone https://github.com/himangi2003/ViSpace.git
+cd ViSpace
+
+# GPU (CUDA 12.1): install the matching PyTorch build first…
+pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+pip install .        # …then the package + all remaining dependencies
+```
+
+Use an **editable** install (`pip install -e .`) if you plan to modify the code —
+changes take effect without reinstalling.
+
+> **CPU-only / no CUDA?** Skip the explicit `torch` line and just run
+> `pip install .`; pip resolves the default CPU build of `torch==2.5.1`.
+
+### Option B — Conda environment
 
 ```bash
 conda env create -f environment.yml
 conda activate vispace
+pip install .
 ```
 
-## Google Colab
+### Option C — Google Colab
 
 ```bash
-pip install -q -r ViSpace_requirements-colab.txt
+pip install -q -r requirements/colab.txt
+pip install -q .
 ```
 
 See **Chapter 1** of the User Manual for complete installation instructions.
@@ -122,7 +151,7 @@ echo 'export HF_TOKEN=hf_your_token_here' >> ~/.bashrc   # or ~/.zshrc
 source ~/.bashrc
 ```
 
-*Method B — Jupyter notebook cell* (see `Vispace_tutorial.ipynb` for the full walkthrough):
+*Method B — Jupyter notebook cell* (see `notebooks/ViSpace_tutorial.ipynb` for the full walkthrough):
 
 ```python
 import os
@@ -147,13 +176,15 @@ Complete instructions are provided in **Chapter 1** of the User Manual.
 
 # Environment Check
 
-Before processing any slide, verify the installation:
+Before processing any slide, verify the installation with the `vispace-check`
+console command (installed with the package):
 
 ```bash
-python environment_check.py
+vispace-check                              # validate the current environment
+vispace-check --from-json run_config.json  # also validate the paths in a saved config
 ```
 
-This script validates
+This validates
 
 - Python environment
 - CUDA availability
@@ -164,6 +195,39 @@ This script validates
 - Output directories
 
 See **Chapter 2** for further details.
+
+# Running a Test
+
+There is no unit-test suite yet — the pipeline's real test is an end-to-end run
+on a slide. Use the checks below to confirm the install is wired up before
+committing to a long run.
+
+**1. Smoke test — package import, console commands, and bundled assets:**
+
+```bash
+# Run from any directory to prove nothing depends on the current folder.
+python -c "import vispace; print('vispace', vispace.__version__)"
+vispace --help
+vispace-check
+```
+
+If `import vispace` succeeds and `vispace --help` prints the flag list, the
+package, its dependencies, and the bundled model checkpoint are all resolvable.
+
+**2. Single-stage test on a real slide** — the cheapest stage that exercises the
+GPU and the model:
+
+```bash
+vispace --wsi /path/to/slide.svs --stages tessellation,segmentation
+```
+
+**3. Adding a formal test suite (optional).** `pytest` is the natural fit — put
+tests under `tests/` and run them with an editable install:
+
+```bash
+pip install -e . pytest
+pytest -q
+```
 
 
 ## Overview
@@ -197,14 +261,13 @@ Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by `
 ## Quick Start
 
 ```python
-from config import PipelineConfig
-from run_vispace import run_vispace
+from vispace import PipelineConfig, run_vispace
 
 cfg = PipelineConfig(
     OUT_DIR    = "vispace_output",
-    CHECKPOINT = "TNBC_weights/TNBC_best.pt",
     WSI_PATH   = "slides/your_slide.svs",
     MUSSEL_DIR = "Mussel/",
+    # CHECKPOINT defaults to the bundled TNBC model; set it to use your own .pt
 )
 
 results = run_vispace(cfg.WSI_PATH, cfg)
@@ -218,10 +281,9 @@ To run every slide in a folder, loop over the files yourself and swap in each pa
 ```python
 from pathlib import Path
 from dataclasses import replace
-from config import PipelineConfig
-from run_vispace import run_vispace
+from vispace import PipelineConfig, run_vispace
 
-base_cfg = PipelineConfig(OUT_DIR="vispace_output", CHECKPOINT="TNBC_weights/TNBC_best.pt", MUSSEL_DIR="Mussel/")
+base_cfg = PipelineConfig(OUT_DIR="vispace_output", MUSSEL_DIR="Mussel/")
 
 for svs in Path("slides/").glob("*.svs"):
     cfg = replace(base_cfg, WSI_PATH=str(svs))
@@ -232,7 +294,15 @@ for svs in Path("slides/").glob("*.svs"):
 
 ## CLI Reference
 
-All scripts share the same conventions: every field on `PipelineConfig` is available as a `--flag`, and every script accepts `--from-json run_config.json` to reuse a config saved once via `config.py --print-config`. Run any script with `--help` to see its full flag list.
+> **Invocation after install.** The pipeline modules now live inside the
+> `vispace` package, so run them as modules rather than loose files. The command
+> examples below written as `python <name>.py …` map to
+> **`python -m vispace.<name> …`** (e.g. `python -m vispace.tessellate`). The two
+> most common entry points also have console-command shortcuts: the full
+> pipeline is `vispace …` (= `python -m vispace.run_vispace`) and the
+> environment check is `vispace-check …`.
+
+All scripts share the same conventions: every field on `PipelineConfig` is available as a `--flag`, and every script accepts `--from-json run_config.json` to reuse a config saved once via `python -m vispace.config --print-config`. Run any script with `--help` to see its full flag list.
 
 ### 0. Build the config once
 
@@ -259,16 +329,16 @@ huggingface-cli login
 ### 3. Run the full pipeline in one command
 
 ```bash
-python run_vispace.py --from-json run_config.json
+vispace --from-json run_config.json
 ```
 
 ```bash
 # run only a subset of stages (prerequisites must already exist)
-python run_vispace.py --from-json run_config.json \
+vispace --from-json run_config.json \
     --stages cluster_tils_tsr_score,immune_proximity,necrosis_proximity
 
 # force specific stages to re-run even if output exists
-python run_vispace.py --from-json run_config.json \
+vispace --from-json run_config.json \
     --force-stages tumor_roi_overlay
 ```
 
@@ -332,7 +402,32 @@ Every stage script also works as a Python import — see the next section.
 
 ## Running in a Jupyter Notebook
 
-A full walkthrough notebook is provided at `notebooks/ViSpace_tutorial.ipynb`. The short version: every stage exposes a plain Python function (`run_*(wsi_path, cfg)`), so notebook cells can call them directly instead of shelling out with `!`. `cfg` stays in memory across cells — no need to save/reload `run_config.json` within a single session.
+A full walkthrough notebook is provided at `notebooks/ViSpace_tutorial.ipynb`
+(on Colab, open it and run the install cell first).
+
+Install the package once, then import it like any other library — every stage is
+a plain Python function, so cells call them directly instead of shelling out
+with `!`, and `cfg` stays in memory across cells (no save/reload of
+`run_config.json` within a session):
+
+```python
+# One-time install cell (Colab / fresh kernel)
+!pip install -q -r requirements/colab.txt
+!pip install -q .          # from the repo root; use the repo path on Colab
+```
+
+```python
+from vispace import PipelineConfig, run_vispace, run_stage
+
+cfg = PipelineConfig(
+    OUT_DIR  = "vispace_output",
+    WSI_PATH = "slides/your_slide.svs",
+)
+
+results = run_vispace(cfg.WSI_PATH, cfg)   # full pipeline
+# …or a single stage:
+run_stage("tessellation", cfg.WSI_PATH, cfg)
+```
 
 ## Running Subsets of Stages
 
@@ -352,7 +447,7 @@ results = run_vispace(
 )
 
 # Run a single stage via convenience function
-from run_vispace import run_stage
+from vispace import run_stage
 result = run_stage("tumor_morphology", "histology/slide.svs", cfg, force=True)
 ```
 
