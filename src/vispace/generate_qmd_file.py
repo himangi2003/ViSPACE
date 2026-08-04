@@ -3,7 +3,7 @@ import re
 import json
 from typing import Optional
 
-from config import PipelineConfig
+from .config import PipelineConfig
 
 
 def py_value(value):
@@ -102,7 +102,7 @@ def replace_parameter_cell(qmd_text: str, parameter_cell: str) -> str:
 def generate_report(
     wsi_path: str,
     cfg: Optional[PipelineConfig] = None,
-    template_qmd: str = "vispace_report_template.qmd",
+    template_qmd: Optional[str] = None,
     output_qmd: Optional[str] = None,
 ) -> Path:
     """
@@ -110,10 +110,19 @@ def generate_report(
 
     This function only creates the .qmd file.
     It does not render the report.
+
+    ``template_qmd`` defaults to the report template bundled inside the
+    installed package; pass a path to override it with your own template.
     """
 
     if cfg is None:
         cfg = PipelineConfig()
+
+    if template_qmd is None:
+        from importlib.resources import files
+        template_qmd = str(
+            files("vispace").joinpath("assets", "report", "vispace_report_template.qmd")
+        )
 
     out_dir = getattr(cfg, "OUT_DIR", "") or "vispace_output"
 

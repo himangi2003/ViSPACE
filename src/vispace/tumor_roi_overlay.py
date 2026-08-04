@@ -37,8 +37,8 @@ Pipeline position
 
 Usage (as a library)
 ---------------------
-    from tumor_roi_overlay import run_tumor_roi_overlay
-    from config import cfg
+    from vispace import run_tumor_roi_overlay
+    from vispace import cfg
 
     run_tumor_roi_overlay("slides/TCGA-A1-A0SP.svs", cfg)
 
@@ -77,7 +77,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 
 # ---------------------------------------------------------------------------
@@ -812,7 +812,7 @@ def run_tumor_roi_overlay(
 #     python tumor_roi_overlay.py --from-json run_config.json
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
 

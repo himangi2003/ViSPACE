@@ -20,8 +20,8 @@ Contains
 
 Usage (as a library)
 ---------------------
-    from segmenter import run_segmentation
-    from config import cfg
+    from vispace import run_segmentation
+    from vispace import cfg
 
     run_segmentation(
         wsi_path = "slides/TCGA-A1-A0SP.svs",
@@ -79,7 +79,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -678,7 +678,7 @@ def run_segmentation(
 #     python segmenter.py --from-json run_config.json
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
 

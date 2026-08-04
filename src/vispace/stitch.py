@@ -27,8 +27,8 @@ Pipeline position
 
 Usage (as a library)
 ---------------------
-    from stitch import run_stitching
-    from config import cfg
+    from vispace import run_stitching
+    from vispace import cfg
 
     results = run_stitching(
         wsi_path = "slides/TCGA-A1.svs",
@@ -84,8 +84,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig, add_config_fields_to_parser, config_from_json
-from segmenter import (
+from .config import cfg as default_cfg, PipelineConfig, add_config_fields_to_parser, config_from_json
+from .segmenter import (
     CLASS_NAMES,
     COLORS_BGR,
     N_CLASSES,

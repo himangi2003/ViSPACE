@@ -8,9 +8,9 @@ Import this in every pipeline script instead of hardcoding values.
 
 Usage (as a library)
 ---------------------
-    from config import cfg, PipelineConfig
+    from vispace import cfg, PipelineConfig
     # Use the default singleton
-    from run_vispace import run_vispace
+    from vispace import run_vispace
     results = run_vispace("slides/TCGA-A1-A0SP.svs", cfg)
 
     # Override specific fields for a one-off run
@@ -63,8 +63,14 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass, field, fields, replace
+from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import Any, Optional
+
+
+def _default_checkpoint() -> str:
+    """Path to the model checkpoint bundled inside the installed package."""
+    return str(_pkg_files("vispace").joinpath("assets", "weights", "TNBC_best.pt"))
 
 
 @dataclass
@@ -81,7 +87,7 @@ class PipelineConfig:
 
     # ── ✏  REQUIRED — set these before running ─────────────────────────────
     OUT_DIR:    str = "vispace_output"          # root directory for all outputs
-    CHECKPOINT: str = "TNBC_weights/TNBC_best.pt"  # path to Vispace model checkpoint
+    CHECKPOINT: str = field(default_factory=_default_checkpoint)  # bundled model checkpoint; override for a custom .pt
     WSI_PATH:  str = "your data path"              #  .svs / .tif slides
 
 
@@ -443,7 +449,7 @@ def main(argv: Optional[list] = None) -> None:
 
     if args.run:
         try:
-            from run_vispace import run_vispace
+            from .run_vispace import run_vispace
         except ImportError as e:
             raise SystemExit(
                 "Could not import run_vispace — make sure run_vispace.py is on "

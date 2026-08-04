@@ -22,8 +22,8 @@ Pipeline position
 
 Usage (as a library)
 ---------------------
-    from tumor_morphology_features import run_tumor_morphology_features
-    from config import cfg
+    from vispace import run_tumor_morphology_features
+    from vispace import cfg
 
     run_tumor_morphology_features("slides/TCGA-A1-A0SP.svs", cfg)
 
@@ -68,7 +68,7 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 
 # ---------------------------------------------------------------------------
@@ -1267,7 +1267,7 @@ def run_tumor_morphology_features(
 #     python tumor_morphology_features.py --from-json run_config.json
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
 

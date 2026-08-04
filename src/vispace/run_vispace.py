@@ -62,8 +62,8 @@ cfg.OUT_DIR/<slide_name>/
 
 Usage (as a library)
 ---------------------
-    from run_vispace import run_vispace
-    from config import cfg
+    from vispace import run_vispace
+    from vispace import cfg
 
     results = run_vispace("slides/TCGA-A1-A0SP.svs", cfg)
 
@@ -83,7 +83,7 @@ Usage (as a library)
     )
 
     # Run a single stage via convenience function
-    from run_vispace import run_stage
+    from vispace import run_stage
     result = run_stage("tumor_morphology", "histology/slide.svs", cfg, force=True)
 
 Usage (from the command line)
@@ -116,17 +116,17 @@ import traceback
 from pathlib import Path
 from typing import Optional, Set
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 # ── Stage imports ────────────────────────────────────────────────────────────
-from tessellate                  import run_tessellation
-from segmenter                   import run_segmentation
-from stitch                      import run_stitching
-from tumor_roi_overlay           import run_tumor_roi_overlay
-from cluster_tils_tsr_scoring    import run_cluster_tils_tsr_score
-from immune_proximity_features   import run_immune_proximity_features
-from necrosis_proximity_features import run_necrosis_proximity_features
-from tumor_morphology_features   import run_tumor_morphology_features
+from .tessellate                  import run_tessellation
+from .segmenter                   import run_segmentation
+from .stitch                      import run_stitching
+from .tumor_roi_overlay           import run_tumor_roi_overlay
+from .cluster_tils_tsr_scoring    import run_cluster_tils_tsr_score
+from .immune_proximity_features   import run_immune_proximity_features
+from .necrosis_proximity_features import run_necrosis_proximity_features
+from .tumor_morphology_features   import run_tumor_morphology_features
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +448,7 @@ def main(argv=None) -> None:
     import argparse
     from dataclasses import fields, replace
 
-    from config import add_config_fields_to_parser, config_from_json
+    from .config import add_config_fields_to_parser, config_from_json
 
     cli_argv = list(sys.argv[1:] if argv is None else argv)
 

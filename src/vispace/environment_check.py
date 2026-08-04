@@ -24,8 +24,8 @@ Checks performed
 
 Usage (as a library)
 ---------------------
-    from environment_check import run_environment_check
-    from config import cfg
+    from vispace import run_environment_check
+    from vispace import cfg
 
     ok = run_environment_check(cfg)
     if not ok:
@@ -381,7 +381,7 @@ def check_gpu(device_pref: str = "cuda") -> bool:
 
     # ── Step 5: Autocast dtype (mirrors segmenter.py exactly) ────────────
     try:
-        from segmenter import _best_autocast_dtype
+        from .segmenter import _best_autocast_dtype
         dtype = _best_autocast_dtype("cuda")
     except ImportError:
         dtype = torch.bfloat16 if major >= 8 else torch.float16
@@ -540,7 +540,7 @@ def run_environment_check(cfg=None) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
     cfg, _ = config_from_args(argv)
     has_real_cfg = bool(cfg.WSI_PATH) and cfg.WSI_PATH != "your data path"
     ok = run_environment_check(cfg if has_real_cfg else None)

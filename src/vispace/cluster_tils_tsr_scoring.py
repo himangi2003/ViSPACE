@@ -50,8 +50,8 @@ Pipeline position
 
 Usage (as a library)
 ---------------------
-    from cluster_tils_tsr_score import run_cluster_tils_tsr_score
-    from config import cfg
+    from vispace import run_cluster_tils_tsr_score
+    from vispace import cfg
 
     run_cluster_tils_tsr_score("slides/TCGA-A1-A0SP.svs", cfg)
 
@@ -98,7 +98,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 log = logging.getLogger(__name__)
 
@@ -1316,7 +1316,7 @@ def run_cluster_tils_tsr_score(
 #     python cluster_tils_tsr_score.py --from-json run_config.json
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
 
