@@ -25,12 +25,12 @@ microenvironment (TME).
 
 
 <p align="center">
-  <img src="ViSpace_workflow.png" alt="ViSPACE pipeline architecture" width="800"><br>
+  <img src="docs/ViSpace_workflow.png" alt="ViSPACE pipeline architecture" width="800"><br>
   <em>Detailed pipeline architecture — tessellation through spatial feature extraction</em>
 </p>
 
 <p align="center">
-  <img src="workflow2.png" alt="ViSPACE high-level workflow" width="800"><br>
+  <img src="docs/workflow2.png" alt="ViSPACE high-level workflow" width="800"><br>
   <em>High-level workflow overview</em>
 </p>
 
@@ -86,7 +86,7 @@ ViSPACE was developed and tested using
 
 
 ```bash
-conda env create -f ViSPACE_environment.yml
+conda env create -f environment.yml
 conda activate vispace
 ```
 
@@ -332,7 +332,7 @@ Every stage script also works as a Python import — see the next section.
 
 ## Running in a Jupyter Notebook
 
-A full walkthrough notebook is provided at `ViSpace_tutorial.ipynb`. The short version: every stage exposes a plain Python function (`run_*(wsi_path, cfg)`), so notebook cells can call them directly instead of shelling out with `!`. `cfg` stays in memory across cells — no need to save/reload `run_config.json` within a single session.
+A full walkthrough notebook is provided at `notebooks/ViSpace_tutorial.ipynb`. The short version: every stage exposes a plain Python function (`run_*(wsi_path, cfg)`), so notebook cells can call them directly instead of shelling out with `!`. `cfg` stays in memory across cells — no need to save/reload `run_config.json` within a single session.
 
 ## Running Subsets of Stages
 
@@ -472,4 +472,4 @@ If you use Vispace in your research, please cite the associated publication (for
 
 ## License
 
-See `LICENSE` for terms of use.
+ViSPACE is released under the Apache License 2.0. See `LICENSE` for the full terms.

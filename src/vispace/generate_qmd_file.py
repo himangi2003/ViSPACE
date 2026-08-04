@@ -108,8 +108,9 @@ def generate_report(
     """
     Generate a QMD pathology report file from PipelineConfig.
 
-    This function only creates the .qmd file.
-    It does not render the report.
+    Writes the ``.qmd`` file and, when the bundled template is used, stages
+    its stylesheet next to the output so the report renders self-contained
+    from any working directory. It does not render the report itself.
 
     ``template_qmd`` defaults to the report template bundled inside the
     installed package; pass a path to override it with your own template.
@@ -118,6 +119,7 @@ def generate_report(
     if cfg is None:
         cfg = PipelineConfig()
 
+    used_bundled_template = template_qmd is None
     if template_qmd is None:
         from importlib.resources import files
         template_qmd = str(
@@ -149,5 +151,20 @@ def generate_report(
 
     output_path = Path(output_qmd)
     output_path.write_text(qmd_text, encoding="utf-8")
+
+    # Stage the stylesheet the bundled template references (theme:
+    # vipspace_report_style.scss) next to the output, so Quarto can render
+    # the report regardless of the working directory. Never clobber a
+    # stylesheet the user has already placed there.
+    if used_bundled_template:
+        import shutil
+        from importlib.resources import as_file, files
+
+        style_name = "vipspace_report_style.scss"
+        style_dst = output_path.parent / style_name
+        if not style_dst.exists():
+            style_src = files("vispace").joinpath("assets", "report", style_name)
+            with as_file(style_src) as real_path:
+                shutil.copyfile(real_path, style_dst)
 
     return output_path

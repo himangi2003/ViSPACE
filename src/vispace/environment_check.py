@@ -81,7 +81,7 @@ def check_python_version(min_version=(3, 10)) -> bool:
               f"{min_version[0]}.{min_version[1]}")
         return True
     print(f"{_FAIL}Python {v.major}.{v.minor} is older than the recommended "
-          f"{min_version[0]}.{min_version[1]} (ViSPACE_environment.yml pins 3.11)")
+          f"{min_version[0]}.{min_version[1]} (environment.yml pins 3.11)")
     return False
 
 
