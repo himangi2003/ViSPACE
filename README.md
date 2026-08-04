@@ -82,18 +82,47 @@ ViSPACE was developed and tested using
 
 ## Prerequisites
 
+Python **3.11** and, for GPU inference, an NVIDIA GPU with CUDA 12.1 (see
+[Recommended System Requirements](#recommended-system-requirements)).
+
 # Installation
 
+ViSPACE is a pip-installable package. Any of the options below installs the
+`vispace` package plus two console commands — `vispace` (run the pipeline) and
+`vispace-check` (validate the environment).
+
+### Option A — install from source *(recommended)*
+
+```bash
+git clone https://github.com/himangi2003/ViSpace.git
+cd ViSpace
+
+# GPU (CUDA 12.1): install the matching PyTorch build first…
+pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+pip install .        # …then the package + all remaining dependencies
+```
+
+Use an **editable** install (`pip install -e .`) if you plan to modify the code —
+changes take effect without reinstalling.
+
+> **CPU-only / no CUDA?** Skip the explicit `torch` line and just run
+> `pip install .`; pip resolves the default CPU build of `torch==2.5.1`.
+
+### Option B — Conda environment
 
 ```bash
 conda env create -f environment.yml
 conda activate vispace
+pip install .
 ```
 
-## Google Colab
+### Option C — Google Colab
 
 ```bash
-pip install -q -r ViSpace_requirements-colab.txt
+pip install -q -r requirements/colab.txt
+pip install -q .
 ```
 
 See **Chapter 1** of the User Manual for complete installation instructions.
@@ -122,7 +151,7 @@ echo 'export HF_TOKEN=hf_your_token_here' >> ~/.bashrc   # or ~/.zshrc
 source ~/.bashrc
 ```
 
-*Method B — Jupyter notebook cell* (see `Vispace_tutorial.ipynb` for the full walkthrough):
+*Method B — Jupyter notebook cell* (see `notebooks/ViSpace_tutorial.ipynb` for the full walkthrough):
 
 ```python
 import os
@@ -147,13 +176,15 @@ Complete instructions are provided in **Chapter 1** of the User Manual.
 
 # Environment Check
 
-Before processing any slide, verify the installation:
+Before processing any slide, verify the installation with the `vispace-check`
+console command (installed with the package):
 
 ```bash
-python environment_check.py
+vispace-check                              # validate the current environment
+vispace-check --from-json run_config.json  # also validate the paths in a saved config
 ```
 
-This script validates
+This validates
 
 - Python environment
 - CUDA availability
@@ -165,46 +196,78 @@ This script validates
 
 See **Chapter 2** for further details.
 
+# Running a Test
+
+There is no unit-test suite yet — the pipeline's real test is an end-to-end run
+on a slide. Use the checks below to confirm the install is wired up before
+committing to a long run.
+
+**1. Smoke test — package import, console commands, and bundled assets:**
+
+```bash
+# Run from any directory to prove nothing depends on the current folder.
+python -c "import vispace; print('vispace', vispace.__version__)"
+vispace --help
+vispace-check
+```
+
+If `import vispace` succeeds and `vispace --help` prints the flag list, the
+package, its dependencies, and the bundled model checkpoint are all resolvable.
+
+**2. Single-stage test on a real slide** — the cheapest stage that exercises the
+GPU and the model:
+
+```bash
+vispace --wsi /path/to/slide.svs --stages tessellation,segmentation
+```
+
+**3. Adding a formal test suite (optional).** `pytest` is the natural fit — put
+tests under `tests/` and run them with an editable install:
+
+```bash
+pip install -e . pytest
+pytest -q
+```
+
 
 ## Overview
 
-Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by `run_vispace.py`:
+Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by the `vispace` command (`vispace.run_vispace`):
 
-| # | Stage | Script | Description |
+| # | Stage | Module | Description |
 |---|-------|--------|-------------|
-| 1 | Tessellation | `tessellate.py` | Tile the WSI into 224×224 px patches using Mussel |
-| 2 | Segmentation | `segmenter.py` | Run Virchow2 + pixel-wise decoder on every patch |
-| 3 | Stitching | `stitch.py` | Merge per-patch masks into a slide-level GeoJSON |
-| 4 | Tumour ROI Overlay | `tumor_roi_overlay.py` | Identify and cluster high-tumour-content ROI boxes |
-| 5 | Cluster TSR / sTILs | `cluster_tils_tsr_score.py` | Compute TSR and sTILs per tumour cluster |
-| 6 | Immune Proximity | `immune_proximity_features.py` | TIL–tumour boundary distance features |
-| 7 | Necrosis Proximity | `necrosis_proximity_features.py` | Necrosis–tumour & necrosis–immune distance features |
-| 8 | Tumour Morphology | `tumor_morphology_features.py` | Shape, fragmentation, and perimeter features per cluster |
+| 1 | Tessellation | `vispace.tessellate` | Tile the WSI into 224×224 px patches using Mussel |
+| 2 | Segmentation | `vispace.segmenter` | Run Virchow2 + pixel-wise decoder on every patch |
+| 3 | Stitching | `vispace.stitch` | Merge per-patch masks into a slide-level GeoJSON |
+| 4 | Tumour ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-tumour-content ROI boxes |
+| 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per tumour cluster |
+| 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–tumour boundary distance features |
+| 7 | Necrosis Proximity | `vispace.necrosis_proximity_features` | Necrosis–tumour & necrosis–immune distance features |
+| 8 | Tumour Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
 
 **Segmentation classes:** Tumour · Stroma · Necrosis · Inflammatory (TILs) · Others
 
 **Orchestration & utilities** (not pipeline stages themselves):
 
-| Script | Purpose |
+| Module | Purpose |
 |---|---|
-| `config.py` | Build and save a run configuration |
-| `environment_check.py` | Pre-flight dependency / GPU / path validation |
-| `run_vispace.py` | Runs all 8 stages, resumable, subset-capable |
-| `report/generate_report.py` | Renders an HTML report (Quarto) from a completed run |
+| `vispace.config` | Build and save a run configuration |
+| `vispace.environment_check` | Pre-flight dependency / GPU / path validation |
+| `vispace.run_vispace` | Runs all 8 stages, resumable, subset-capable |
+| `vispace.generate_qmd_file` | Builds the Quarto `.qmd` report from a completed run |
 
 ---
 
 ## Quick Start
 
 ```python
-from config import PipelineConfig
-from run_vispace import run_vispace
+from vispace import PipelineConfig, run_vispace
 
 cfg = PipelineConfig(
     OUT_DIR    = "vispace_output",
-    CHECKPOINT = "TNBC_weights/TNBC_best.pt",
     WSI_PATH   = "slides/your_slide.svs",
     MUSSEL_DIR = "Mussel/",
+    # CHECKPOINT defaults to the bundled TNBC model; set it to use your own .pt
 )
 
 results = run_vispace(cfg.WSI_PATH, cfg)
@@ -218,10 +281,9 @@ To run every slide in a folder, loop over the files yourself and swap in each pa
 ```python
 from pathlib import Path
 from dataclasses import replace
-from config import PipelineConfig
-from run_vispace import run_vispace
+from vispace import PipelineConfig, run_vispace
 
-base_cfg = PipelineConfig(OUT_DIR="vispace_output", CHECKPOINT="TNBC_weights/TNBC_best.pt", MUSSEL_DIR="Mussel/")
+base_cfg = PipelineConfig(OUT_DIR="vispace_output", MUSSEL_DIR="Mussel/")
 
 for svs in Path("slides/").glob("*.svs"):
     cfg = replace(base_cfg, WSI_PATH=str(svs))
@@ -232,22 +294,29 @@ for svs in Path("slides/").glob("*.svs"):
 
 ## CLI Reference
 
-All scripts share the same conventions: every field on `PipelineConfig` is available as a `--flag`, and every script accepts `--from-json run_config.json` to reuse a config saved once via `config.py --print-config`. Run any script with `--help` to see its full flag list.
+> **Invocation after install.** The pipeline modules live inside the `vispace`
+> package, so each is run as a module — **`python -m vispace.<name> …`** (e.g.
+> `python -m vispace.tessellate`) — rather than as a loose script file. The two
+> most common entry points also have console-command shortcuts installed on your
+> `PATH`: the full pipeline is `vispace …` (= `python -m vispace.run_vispace`)
+> and the environment check is `vispace-check …`.
+
+All scripts share the same conventions: every field on `PipelineConfig` is available as a `--flag`, and every script accepts `--from-json run_config.json` to reuse a config saved once via `python -m vispace.config --print-config`. Run any script with `--help` to see its full flag list.
 
 ### 0. Build the config once
 
 ```bash
-python config.py \
+python -m vispace.config \
     --wsi-path slides/TCGA-A1-A0SP.svs \
-    --checkpoint TNBC_weights/TNBC_best.pt \
     --mussel-dir Mussel/ \
     --print-config > run_config.json
+# CHECKPOINT defaults to the bundled TNBC model; add --checkpoint path/to.pt to override
 ```
 
 ### 1. Pre-flight environment check *(recommended before a long run)*
 
 ```bash
-python environment_check.py --from-json run_config.json
+vispace-check --from-json run_config.json
 ```
 
 ### 2. Authenticate with HuggingFace *(skip if using local Virchow2 weights)*
@@ -259,16 +328,16 @@ huggingface-cli login
 ### 3. Run the full pipeline in one command
 
 ```bash
-python run_vispace.py --from-json run_config.json
+vispace --from-json run_config.json
 ```
 
 ```bash
 # run only a subset of stages (prerequisites must already exist)
-python run_vispace.py --from-json run_config.json \
+vispace --from-json run_config.json \
     --stages cluster_tils_tsr_score,immune_proximity,necrosis_proximity
 
 # force specific stages to re-run even if output exists
-python run_vispace.py --from-json run_config.json \
+vispace --from-json run_config.json \
     --force-stages tumor_roi_overlay
 ```
 
@@ -276,63 +345,88 @@ python run_vispace.py --from-json run_config.json \
 
 ```bash
 # 3a. tessellate
-python tessellate.py --from-json run_config.json
+python -m vispace.tessellate --from-json run_config.json
 
 # 3b. segment
-python segmenter.py --from-json run_config.json
-python segmenter.py --from-json run_config.json --batch-size 96   # override example
+python -m vispace.segmenter --from-json run_config.json
+python -m vispace.segmenter --from-json run_config.json --batch-size 96   # override example
 
 # 3c. stitch + GeoJSON
-python stitch.py --from-json run_config.json
-python stitch.py --from-json run_config.json --min-area-px 200    # override example
+python -m vispace.stitch --from-json run_config.json
+python -m vispace.stitch --from-json run_config.json --min-area-px 200    # override example
 
 # 3d. tumor ROI clustering + overlay
-python tumor_roi_overlay.py --from-json run_config.json
-python tumor_roi_overlay.py --from-json run_config.json --roi-size-um 150
+python -m vispace.tumor_roi_overlay --from-json run_config.json
+python -m vispace.tumor_roi_overlay --from-json run_config.json --roi-size-um 150
 
 # 3e. cluster TSR / sTILs scoring
-python cluster_tils_tsr_score.py --from-json run_config.json
-python cluster_tils_tsr_score.py --from-json run_config.json --tils-denominator tissue
+python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json
+python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json --tils-denominator tissue
 
 # 3f. immune / TIL proximity features
-python immune_proximity_features.py --from-json run_config.json
-python immune_proximity_features.py --from-json run_config.json --immune-contact-tolerance-um 10
+python -m vispace.immune_proximity_features --from-json run_config.json
+python -m vispace.immune_proximity_features --from-json run_config.json --immune-contact-tolerance-um 10
 
 # 3g. necrosis proximity features
-python necrosis_proximity_features.py --from-json run_config.json
-python necrosis_proximity_features.py --from-json run_config.json --necrosis-immune-coupling-threshold-um 150
+python -m vispace.necrosis_proximity_features --from-json run_config.json
+python -m vispace.necrosis_proximity_features --from-json run_config.json --necrosis-immune-coupling-threshold-um 150
 
 # 3h. tumor morphology features
-python tumor_morphology_features.py --from-json run_config.json
-python tumor_morphology_features.py --from-json run_config.json --morphology-min-island-area-um2 500
+python -m vispace.tumor_morphology_features --from-json run_config.json
+python -m vispace.tumor_morphology_features --from-json run_config.json --morphology-min-island-area-um2 500
 ```
 
 
 
 ### Full command reference table
 
-| # | Script | Purpose | Minimal command |
+| # | Module | Purpose | Minimal command |
 |---|---|---|---|
-| 0 | `config.py` | Build + save the run config | `python config.py --wsi-path ... --checkpoint ... --print-config > run_config.json` |
-| — | `environment_check.py` | Validate dependencies, GPU, paths before running | `python environment_check.py --from-json run_config.json` |
-| 1 | `tessellate.py` | Tile the WSI (Mussel) | `python tessellate.py --from-json run_config.json` |
-| 2 | `segmenter.py` | Run Virchow2 segmentation inference | `python segmenter.py --from-json run_config.json` |
-| 3 | `stitch.py` | Stitch tiles → WSI canvas + GeoJSON | `python stitch.py --from-json run_config.json` |
-| 4 | `tumor_roi_overlay.py` | Cluster tumor tiles, build ROI boxes | `python tumor_roi_overlay.py --from-json run_config.json` |
-| 5 | `cluster_tils_tsr_score.py` | TSR + sTILs scoring per cluster | `python cluster_tils_tsr_score.py --from-json run_config.json` |
-| 6 | `immune_proximity_features.py` | TIL proximity to tumor boundary | `python immune_proximity_features.py --from-json run_config.json` |
-| 7 | `necrosis_proximity_features.py` | Necrosis proximity + phenotyping | `python necrosis_proximity_features.py --from-json run_config.json` |
-| 8 | `tumor_morphology_features.py` | Tumor shape / fragmentation features | `python tumor_morphology_features.py --from-json run_config.json` |
-| — | `run_vispace.py` | Orchestrates stages 1–8, resumable | `python run_vispace.py --from-json run_config.json` |
-| — | `generate_qmd_file.py` | Render the HTML report (Quarto) qmd file for QUARTO rendering later| `python generate_report.py` |
+| 0 | `vispace.config` | Build + save the run config | `python -m vispace.config --wsi-path ... --print-config > run_config.json` |
+| — | `vispace.environment_check` | Validate dependencies, GPU, paths before running | `vispace-check --from-json run_config.json` |
+| 1 | `vispace.tessellate` | Tile the WSI (Mussel) | `python -m vispace.tessellate --from-json run_config.json` |
+| 2 | `vispace.segmenter` | Run Virchow2 segmentation inference | `python -m vispace.segmenter --from-json run_config.json` |
+| 3 | `vispace.stitch` | Stitch tiles → WSI canvas + GeoJSON | `python -m vispace.stitch --from-json run_config.json` |
+| 4 | `vispace.tumor_roi_overlay` | Cluster tumor tiles, build ROI boxes | `python -m vispace.tumor_roi_overlay --from-json run_config.json` |
+| 5 | `vispace.cluster_tils_tsr_scoring` | TSR + sTILs scoring per cluster | `python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json` |
+| 6 | `vispace.immune_proximity_features` | TIL proximity to tumor boundary | `python -m vispace.immune_proximity_features --from-json run_config.json` |
+| 7 | `vispace.necrosis_proximity_features` | Necrosis proximity + phenotyping | `python -m vispace.necrosis_proximity_features --from-json run_config.json` |
+| 8 | `vispace.tumor_morphology_features` | Tumor shape / fragmentation features | `python -m vispace.tumor_morphology_features --from-json run_config.json` |
+| — | `vispace.run_vispace` | Orchestrates stages 1–8, resumable | `vispace --from-json run_config.json` |
+| — | `vispace.generate_qmd_file` | Build the Quarto `.qmd` report (library function) | `from vispace import generate_report` |
 
-Every stage script also works as a Python import — see the next section.
+Every stage module also works as a Python import — see the next section.
 
 ---
 
 ## Running in a Jupyter Notebook
 
-A full walkthrough notebook is provided at `notebooks/ViSpace_tutorial.ipynb`. The short version: every stage exposes a plain Python function (`run_*(wsi_path, cfg)`), so notebook cells can call them directly instead of shelling out with `!`. `cfg` stays in memory across cells — no need to save/reload `run_config.json` within a single session.
+A full walkthrough notebook is provided at `notebooks/ViSpace_tutorial.ipynb`
+(on Colab, open it and run the install cell first).
+
+Install the package once, then import it like any other library — every stage is
+a plain Python function, so cells call them directly instead of shelling out
+with `!`, and `cfg` stays in memory across cells (no save/reload of
+`run_config.json` within a session):
+
+```python
+# One-time install cell (Colab / fresh kernel)
+!pip install -q -r requirements/colab.txt
+!pip install -q .          # from the repo root; use the repo path on Colab
+```
+
+```python
+from vispace import PipelineConfig, run_vispace, run_stage
+
+cfg = PipelineConfig(
+    OUT_DIR  = "vispace_output",
+    WSI_PATH = "slides/your_slide.svs",
+)
+
+results = run_vispace(cfg.WSI_PATH, cfg)   # full pipeline
+# …or a single stage:
+run_stage("tessellation", cfg.WSI_PATH, cfg)
+```
 
 ## Running Subsets of Stages
 
@@ -352,7 +446,7 @@ results = run_vispace(
 )
 
 # Run a single stage via convenience function
-from run_vispace import run_stage
+from vispace import run_stage
 result = run_stage("tumor_morphology", "histology/slide.svs", cfg, force=True)
 ```
 
