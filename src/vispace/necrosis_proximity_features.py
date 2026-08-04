@@ -23,8 +23,8 @@ Pipeline position
 
 Usage (as a library)
 ---------------------
-    from necrosis_proximity_features import run_necrosis_proximity_features
-    from config import cfg
+    from vispace import run_necrosis_proximity_features
+    from vispace import cfg
 
     run_necrosis_proximity_features("slides/TCGA-A1-A0SP.svs", cfg)
 
@@ -67,7 +67,7 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from tqdm import tqdm
 
-from config import cfg as default_cfg, PipelineConfig
+from .config import cfg as default_cfg, PipelineConfig
 
 
 # ---------------------------------------------------------------------------
@@ -885,7 +885,7 @@ def run_necrosis_proximity_features(
 #     python necrosis_proximity_features.py --from-json run_config.json
 
 def main(argv=None) -> None:
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)  # handles --from-json, per-field overrides, etc.
 

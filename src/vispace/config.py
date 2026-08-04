@@ -8,9 +8,9 @@ Import this in every pipeline script instead of hardcoding values.
 
 Usage (as a library)
 ---------------------
-    from config import cfg, PipelineConfig
+    from vispace import cfg, PipelineConfig
     # Use the default singleton
-    from run_vispace import run_vispace
+    from vispace import run_vispace
     results = run_vispace("slides/TCGA-A1-A0SP.svs", cfg)
 
     # Override specific fields for a one-off run
@@ -443,7 +443,7 @@ def main(argv: Optional[list] = None) -> None:
 
     if args.run:
         try:
-            from run_vispace import run_vispace
+            from .run_vispace import run_vispace
         except ImportError as e:
             raise SystemExit(
                 "Could not import run_vispace — make sure run_vispace.py is on "

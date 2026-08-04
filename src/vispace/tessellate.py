@@ -20,8 +20,8 @@ Output directory
 
 Usage as a library
 ------------------
-    from tessellate import run_tessellation
-    from config import cfg
+    from vispace import run_tessellation
+    from vispace import cfg
 
     tess_dir = run_tessellation(
         wsi_path=cfg.WSI_PATH,
@@ -63,8 +63,8 @@ from typing import Optional, Tuple, Union
 
 from omegaconf import OmegaConf
 
-from config import PipelineConfig
-from config import cfg as default_cfg
+from .config import PipelineConfig
+from .config import cfg as default_cfg
 
 
 ThumbnailSize = Union[int, Tuple[int, int]]
@@ -424,7 +424,7 @@ def main(argv=None) -> None:
     """
     Run tessellation using arguments handled by config.py.
     """
-    from config import config_from_args
+    from .config import config_from_args
 
     cfg, _ = config_from_args(argv)
 

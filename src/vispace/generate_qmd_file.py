@@ -3,7 +3,7 @@ import re
 import json
 from typing import Optional
 
-from config import PipelineConfig
+from .config import PipelineConfig
 
 
 def py_value(value):
