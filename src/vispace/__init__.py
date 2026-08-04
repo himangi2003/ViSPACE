@@ -34,6 +34,9 @@ from .config import (
     build_arg_parser,
 )
 
+# --- Environment validation --------------------------------------------------
+from .environment_check import run_environment_check
+
 # --- Top-level orchestrator --------------------------------------------------
 from .run_vispace import run_vispace, run_stage
 
@@ -57,6 +60,8 @@ __all__ = [
     "cfg",
     "config_from_json",
     "build_arg_parser",
+    # environment
+    "run_environment_check",
     # orchestrator
     "run_vispace",
     "run_stage",
