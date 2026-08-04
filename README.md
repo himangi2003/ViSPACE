@@ -232,29 +232,29 @@ pytest -q
 
 ## Overview
 
-Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by `run_vispace.py`:
+Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by the `vispace` command (`vispace.run_vispace`):
 
-| # | Stage | Script | Description |
+| # | Stage | Module | Description |
 |---|-------|--------|-------------|
-| 1 | Tessellation | `tessellate.py` | Tile the WSI into 224×224 px patches using Mussel |
-| 2 | Segmentation | `segmenter.py` | Run Virchow2 + pixel-wise decoder on every patch |
-| 3 | Stitching | `stitch.py` | Merge per-patch masks into a slide-level GeoJSON |
-| 4 | Tumour ROI Overlay | `tumor_roi_overlay.py` | Identify and cluster high-tumour-content ROI boxes |
-| 5 | Cluster TSR / sTILs | `cluster_tils_tsr_score.py` | Compute TSR and sTILs per tumour cluster |
-| 6 | Immune Proximity | `immune_proximity_features.py` | TIL–tumour boundary distance features |
-| 7 | Necrosis Proximity | `necrosis_proximity_features.py` | Necrosis–tumour & necrosis–immune distance features |
-| 8 | Tumour Morphology | `tumor_morphology_features.py` | Shape, fragmentation, and perimeter features per cluster |
+| 1 | Tessellation | `vispace.tessellate` | Tile the WSI into 224×224 px patches using Mussel |
+| 2 | Segmentation | `vispace.segmenter` | Run Virchow2 + pixel-wise decoder on every patch |
+| 3 | Stitching | `vispace.stitch` | Merge per-patch masks into a slide-level GeoJSON |
+| 4 | Tumour ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-tumour-content ROI boxes |
+| 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per tumour cluster |
+| 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–tumour boundary distance features |
+| 7 | Necrosis Proximity | `vispace.necrosis_proximity_features` | Necrosis–tumour & necrosis–immune distance features |
+| 8 | Tumour Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
 
 **Segmentation classes:** Tumour · Stroma · Necrosis · Inflammatory (TILs) · Others
 
 **Orchestration & utilities** (not pipeline stages themselves):
 
-| Script | Purpose |
+| Module | Purpose |
 |---|---|
-| `config.py` | Build and save a run configuration |
-| `environment_check.py` | Pre-flight dependency / GPU / path validation |
-| `run_vispace.py` | Runs all 8 stages, resumable, subset-capable |
-| `report/generate_report.py` | Renders an HTML report (Quarto) from a completed run |
+| `vispace.config` | Build and save a run configuration |
+| `vispace.environment_check` | Pre-flight dependency / GPU / path validation |
+| `vispace.run_vispace` | Runs all 8 stages, resumable, subset-capable |
+| `vispace.generate_qmd_file` | Builds the Quarto `.qmd` report from a completed run |
 
 ---
 
@@ -294,30 +294,29 @@ for svs in Path("slides/").glob("*.svs"):
 
 ## CLI Reference
 
-> **Invocation after install.** The pipeline modules now live inside the
-> `vispace` package, so run them as modules rather than loose files. The command
-> examples below written as `python <name>.py …` map to
-> **`python -m vispace.<name> …`** (e.g. `python -m vispace.tessellate`). The two
-> most common entry points also have console-command shortcuts: the full
-> pipeline is `vispace …` (= `python -m vispace.run_vispace`) and the
-> environment check is `vispace-check …`.
+> **Invocation after install.** The pipeline modules live inside the `vispace`
+> package, so each is run as a module — **`python -m vispace.<name> …`** (e.g.
+> `python -m vispace.tessellate`) — rather than as a loose script file. The two
+> most common entry points also have console-command shortcuts installed on your
+> `PATH`: the full pipeline is `vispace …` (= `python -m vispace.run_vispace`)
+> and the environment check is `vispace-check …`.
 
 All scripts share the same conventions: every field on `PipelineConfig` is available as a `--flag`, and every script accepts `--from-json run_config.json` to reuse a config saved once via `python -m vispace.config --print-config`. Run any script with `--help` to see its full flag list.
 
 ### 0. Build the config once
 
 ```bash
-python config.py \
+python -m vispace.config \
     --wsi-path slides/TCGA-A1-A0SP.svs \
-    --checkpoint TNBC_weights/TNBC_best.pt \
     --mussel-dir Mussel/ \
     --print-config > run_config.json
+# CHECKPOINT defaults to the bundled TNBC model; add --checkpoint path/to.pt to override
 ```
 
 ### 1. Pre-flight environment check *(recommended before a long run)*
 
 ```bash
-python environment_check.py --from-json run_config.json
+vispace-check --from-json run_config.json
 ```
 
 ### 2. Authenticate with HuggingFace *(skip if using local Virchow2 weights)*
@@ -346,57 +345,57 @@ vispace --from-json run_config.json \
 
 ```bash
 # 3a. tessellate
-python tessellate.py --from-json run_config.json
+python -m vispace.tessellate --from-json run_config.json
 
 # 3b. segment
-python segmenter.py --from-json run_config.json
-python segmenter.py --from-json run_config.json --batch-size 96   # override example
+python -m vispace.segmenter --from-json run_config.json
+python -m vispace.segmenter --from-json run_config.json --batch-size 96   # override example
 
 # 3c. stitch + GeoJSON
-python stitch.py --from-json run_config.json
-python stitch.py --from-json run_config.json --min-area-px 200    # override example
+python -m vispace.stitch --from-json run_config.json
+python -m vispace.stitch --from-json run_config.json --min-area-px 200    # override example
 
 # 3d. tumor ROI clustering + overlay
-python tumor_roi_overlay.py --from-json run_config.json
-python tumor_roi_overlay.py --from-json run_config.json --roi-size-um 150
+python -m vispace.tumor_roi_overlay --from-json run_config.json
+python -m vispace.tumor_roi_overlay --from-json run_config.json --roi-size-um 150
 
 # 3e. cluster TSR / sTILs scoring
-python cluster_tils_tsr_score.py --from-json run_config.json
-python cluster_tils_tsr_score.py --from-json run_config.json --tils-denominator tissue
+python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json
+python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json --tils-denominator tissue
 
 # 3f. immune / TIL proximity features
-python immune_proximity_features.py --from-json run_config.json
-python immune_proximity_features.py --from-json run_config.json --immune-contact-tolerance-um 10
+python -m vispace.immune_proximity_features --from-json run_config.json
+python -m vispace.immune_proximity_features --from-json run_config.json --immune-contact-tolerance-um 10
 
 # 3g. necrosis proximity features
-python necrosis_proximity_features.py --from-json run_config.json
-python necrosis_proximity_features.py --from-json run_config.json --necrosis-immune-coupling-threshold-um 150
+python -m vispace.necrosis_proximity_features --from-json run_config.json
+python -m vispace.necrosis_proximity_features --from-json run_config.json --necrosis-immune-coupling-threshold-um 150
 
 # 3h. tumor morphology features
-python tumor_morphology_features.py --from-json run_config.json
-python tumor_morphology_features.py --from-json run_config.json --morphology-min-island-area-um2 500
+python -m vispace.tumor_morphology_features --from-json run_config.json
+python -m vispace.tumor_morphology_features --from-json run_config.json --morphology-min-island-area-um2 500
 ```
 
 
 
 ### Full command reference table
 
-| # | Script | Purpose | Minimal command |
+| # | Module | Purpose | Minimal command |
 |---|---|---|---|
-| 0 | `config.py` | Build + save the run config | `python config.py --wsi-path ... --checkpoint ... --print-config > run_config.json` |
-| — | `environment_check.py` | Validate dependencies, GPU, paths before running | `python environment_check.py --from-json run_config.json` |
-| 1 | `tessellate.py` | Tile the WSI (Mussel) | `python tessellate.py --from-json run_config.json` |
-| 2 | `segmenter.py` | Run Virchow2 segmentation inference | `python segmenter.py --from-json run_config.json` |
-| 3 | `stitch.py` | Stitch tiles → WSI canvas + GeoJSON | `python stitch.py --from-json run_config.json` |
-| 4 | `tumor_roi_overlay.py` | Cluster tumor tiles, build ROI boxes | `python tumor_roi_overlay.py --from-json run_config.json` |
-| 5 | `cluster_tils_tsr_score.py` | TSR + sTILs scoring per cluster | `python cluster_tils_tsr_score.py --from-json run_config.json` |
-| 6 | `immune_proximity_features.py` | TIL proximity to tumor boundary | `python immune_proximity_features.py --from-json run_config.json` |
-| 7 | `necrosis_proximity_features.py` | Necrosis proximity + phenotyping | `python necrosis_proximity_features.py --from-json run_config.json` |
-| 8 | `tumor_morphology_features.py` | Tumor shape / fragmentation features | `python tumor_morphology_features.py --from-json run_config.json` |
-| — | `run_vispace.py` | Orchestrates stages 1–8, resumable | `python run_vispace.py --from-json run_config.json` |
-| — | `generate_qmd_file.py` | Render the HTML report (Quarto) qmd file for QUARTO rendering later| `python generate_report.py` |
+| 0 | `vispace.config` | Build + save the run config | `python -m vispace.config --wsi-path ... --print-config > run_config.json` |
+| — | `vispace.environment_check` | Validate dependencies, GPU, paths before running | `vispace-check --from-json run_config.json` |
+| 1 | `vispace.tessellate` | Tile the WSI (Mussel) | `python -m vispace.tessellate --from-json run_config.json` |
+| 2 | `vispace.segmenter` | Run Virchow2 segmentation inference | `python -m vispace.segmenter --from-json run_config.json` |
+| 3 | `vispace.stitch` | Stitch tiles → WSI canvas + GeoJSON | `python -m vispace.stitch --from-json run_config.json` |
+| 4 | `vispace.tumor_roi_overlay` | Cluster tumor tiles, build ROI boxes | `python -m vispace.tumor_roi_overlay --from-json run_config.json` |
+| 5 | `vispace.cluster_tils_tsr_scoring` | TSR + sTILs scoring per cluster | `python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json` |
+| 6 | `vispace.immune_proximity_features` | TIL proximity to tumor boundary | `python -m vispace.immune_proximity_features --from-json run_config.json` |
+| 7 | `vispace.necrosis_proximity_features` | Necrosis proximity + phenotyping | `python -m vispace.necrosis_proximity_features --from-json run_config.json` |
+| 8 | `vispace.tumor_morphology_features` | Tumor shape / fragmentation features | `python -m vispace.tumor_morphology_features --from-json run_config.json` |
+| — | `vispace.run_vispace` | Orchestrates stages 1–8, resumable | `vispace --from-json run_config.json` |
+| — | `vispace.generate_qmd_file` | Build the Quarto `.qmd` report (library function) | `from vispace import generate_report` |
 
-Every stage script also works as a Python import — see the next section.
+Every stage module also works as a Python import — see the next section.
 
 ---
 
