@@ -21,7 +21,7 @@ microenvironment (TME).
 - Immune proximity analysis
 - Necrosis proximity analysis
 - Tumour morphology analysis
-- Automatic HTML report generation
+
 
 
 <p align="center">
@@ -29,10 +29,7 @@ microenvironment (TME).
   <em>Detailed pipeline architecture — tessellation through spatial feature extraction</em>
 </p>
 
-<p align="center">
-  <img src="docs/workflow2.png" alt="ViSPACE high-level workflow" width="800"><br>
-  <em>High-level workflow overview</em>
-</p>
+
 
 ---
 
@@ -94,14 +91,22 @@ ViSPACE is a pip-installable package. Any of the options below installs the
 ### Option A — install from source *(recommended)*
 
 ```bash
+# Create a new environment
+conda create -n vispace python=3.11 -y
+
+# Activate it
+conda activate vispace
+
+# Clone the repository
 git clone https://github.com/himangi2003/ViSpace.git
 cd ViSpace
 
-# GPU (CUDA 12.1): install the matching PyTorch build first…
+# Install the matching PyTorch build
 pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 \
     --extra-index-url https://download.pytorch.org/whl/cu121
 
-pip install .        # …then the package + all remaining dependencies
+# Install the package and its dependencies
+pip install .
 ```
 
 Use an **editable** install (`pip install -e .`) if you plan to modify the code —
