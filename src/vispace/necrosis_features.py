@@ -326,6 +326,23 @@ def extract_necrosis_features_from_csv(
 
     roi_df = pd.read_csv(roi_csv_path)
 
+    # tumor_roi_overlay.py writes bounding-box columns as
+    # x_min/y_min/x_max/y_max; the geometry code below expects
+    # minx/miny/maxx/maxy. Accept either spelling and normalise.
+    column_aliases = {
+        "x_min": "minx",
+        "y_min": "miny",
+        "x_max": "maxx",
+        "y_max": "maxy",
+    }
+    roi_df = roi_df.rename(
+        columns={
+            src: dst
+            for src, dst in column_aliases.items()
+            if src in roi_df.columns and dst not in roi_df.columns
+        }
+    )
+
     required = {
         "cluster_id",
         "minx",
@@ -375,12 +392,12 @@ def run_necrosis_features(
         segmentation_all_classes.geojson
 
     cfg.OUT_DIR/<slide>/spatial_feature_results/tumor_roi_overlay/
-        tumor_cluster_rois.csv
+        tumor_roi_boxes.csv
 
     Writes
     ------
-    cfg.OUT_DIR/<slide>/spatial_feature_results/necrosis_proximity/
-        necrosis_features_by_cluster.csv
+    cfg.OUT_DIR/<slide>/spatial_feature_results/necrosis_feature/
+        necrosis_feature_by_cluster.csv
 
     Parameters
     ----------
@@ -418,17 +435,17 @@ def run_necrosis_features(
         / slide_name
         / "spatial_feature_results"
         / "tumor_roi_overlay"
-        / "tumor_cluster_rois.csv"
+        / "tumor_roi_boxes.csv"
     )
 
     out_dir = (
         Path(cfg.OUT_DIR)
         / slide_name
         / "spatial_feature_results"
-        / "necrosis_proximity"
+        / "necrosis_feature"
     )
 
-    out_csv = out_dir / "necrosis_features_by_cluster.csv"
+    out_csv = out_dir / "necrosis_feature_by_cluster.csv"
 
     if not segmentation_geojson.exists():
         raise FileNotFoundError(
@@ -537,18 +554,18 @@ def main(argv=None) -> None:
         )
 
     slide_name = Path(cfg.WSI_PATH).stem
-    cluster_geojson = (
+    roi_csv = (
         Path(cfg.OUT_DIR) / slide_name
-        / "spatial_feature_results" / "cluster_tils_tsr_score" / "cluster_scoring_polygons.geojson"
+        / "spatial_feature_results" / "tumor_roi_overlay" / "tumor_roi_boxes.csv"
     )
     seg_geojson = (
         Path(cfg.OUT_DIR) / slide_name
         / "segmentation" / "segmentation_all_classes.geojson"
     )
-    if not cluster_geojson.exists():
+    if not roi_csv.exists():
         raise SystemExit(
-            f"Cluster GeoJSON not found: {cluster_geojson}. "
-            f"Run cluster_tils_tsr_score.py for this slide (with the same --out-dir) first."
+            f"Tumour cluster ROI CSV not found: {roi_csv}. "
+            f"Run tumor_roi_overlay.py for this slide (with the same --out-dir) first."
         )
     if not seg_geojson.exists():
         raise SystemExit(
