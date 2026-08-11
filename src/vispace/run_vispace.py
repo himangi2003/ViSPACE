@@ -73,7 +73,7 @@ Usage (as a library)
     # Re-run only scoring stages (segmentation must already exist)
     results = run_vispace(
         "histology/slide.svs", cfg,
-        stages={"cluster_tils_tsr_score", "immune_proximity", "necrosis_proximity"},
+        stages={"cluster_tils_tsr_score", "immune_proximity", "necrosis_features"},
     )
 
     # Force a specific stage to re-run even if output exists
@@ -98,7 +98,7 @@ mirror the stages= / force_stages= parameters above.
 
     # run only a subset of stages
     python run_vispace.py --from-json run_config.json \\
-        --stages cluster_tils_tsr_score,immune_proximity,necrosis_proximity
+        --stages cluster_tils_tsr_score,immune_proximity,necrosis_features
 
     # force specific stages to re-run even if output exists
     python run_vispace.py --from-json run_config.json \\
@@ -218,7 +218,7 @@ def run_vispace(
         pipeline has already been executed.
         Valid names: tessellation, segmentation, stitching,
                      tumor_roi_overlay, cluster_tils_tsr_score,
-                     immune_proximity,necrosis_, tumor_morphology
+                     immune_proximity, necrosis_features, tumor_morphology
 
     force_stages : set of str, optional
         Stage names that must re-run even if their output already exists.

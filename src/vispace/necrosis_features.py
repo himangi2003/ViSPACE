@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-necrosis_proximity_features.py
-==============================
+necrosis_features.py
+====================
 Necrosis feature extraction per tumour cluster from ViSpace GeoJSON output.
 
 Features produced (per cluster)
@@ -10,23 +10,34 @@ Features produced (per cluster)
 - necrosis_perimeter_um   : total necrosis polygon perimeter in µm
 - necrosis_frac           : necrosis area / total tissue area in cluster
 - necrosis_phenotype      : absent | focal | present
+- tissue_area_um2         : total tissue area in the cluster (context)
 
 Phenotype classification
 ------------------------
-- absent  : no necrosis detected in the cluster
+- absent  : no necrosis detected in the cluster (after the noise filter)
 - focal   : necrosis fraction < FOCAL_THRESHOLD
 - present : necrosis fraction >= FOCAL_THRESHOLD
 
+Necrosis polygons smaller than MIN_FRAGMENT_UM2 (default 500 µm²) are
+treated as segmentation noise and dropped before any measurement.
+
 No immune coupling or necrosis-to-immune distance features are computed.
 
-All distances and areas are reported in physical units (µm, µm²)
+All areas and perimeters are reported in physical units (µm², µm)
 using the slide MPP; no pixel² values are written to the output.
+
+Outputs
+-------
+cfg.OUT_DIR/<slide>/spatial_feature_results/necrosis_feature/
+    necrosis_feature_by_cluster.csv   one row per tumour cluster
+    necrosis_feature_wsi_summary.csv  one WSI-level summary row
+    necrosis_summary_figure.png       area / perimeter / phenotype figure
 
 Pipeline position
 -----------------
     tessellate.py → segmenter.py → stitch.py → tumor_roi_overlay.py
         → cluster_tils_tsr_score.py → immune_proximity_features.py
-        → necrosis_proximity_features.py → tumor_morphology_features.py
+        → necrosis_features.py → tumor_morphology_features.py
 
 Usage (as a library)
 --------------------
@@ -41,15 +52,15 @@ Same shared flags as the rest of the pipeline. `config_from_args()` handles
 --wsi-path, --out-dir, --from-json, and all PipelineConfig overrides.
 
     # minimal
-    python necrosis_proximity_features.py \
+    python -m vispace.necrosis_features \
         --wsi-path slides/TCGA-A1-A0SP.svs \
         --out-dir vipsegd_output
 
     # continue from saved config
-    python necrosis_proximity_features.py --from-json run_config.json
+    python -m vispace.necrosis_features --from-json run_config.json
 
     # see all shared options
-    python necrosis_proximity_features.py --help
+    python -m vispace.necrosis_features --help
 """
 
 from __future__ import annotations
@@ -73,8 +84,12 @@ STROMA_CLASS = "Stroma"
 INFLAM_CLASS = "Inflammatory"
 OTHERS_CLASS = "Others"
 
-# Necrosis fraction threshold separating focal from present
+# Necrosis fraction threshold separating focal from present.
 FOCAL_THRESHOLD = 0.05
+
+# Necrosis fragments below this physical area (µm²) are treated as
+# segmentation noise and excluded from all measurements.
+MIN_FRAGMENT_UM2 = 500.0
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +122,7 @@ def _load_polygons_by_class(
         classification = props.get("classification") or {}
         cls = classification.get("name") or props.get("class")
 
-        # Normalise tumour spelling if needed
+        # Normalise tumour spelling if needed.
         if cls in {"Tumor", "tumor", "tumour"}:
             cls = "Tumour"
 
@@ -142,6 +157,7 @@ def extract_necrosis_features(
     cluster_roi_boxes: list[dict],
     mpp: float,
     focal_threshold: float = FOCAL_THRESHOLD,
+    min_fragment_um2: float = MIN_FRAGMENT_UM2,
 ) -> pd.DataFrame:
     """
     Extract necrosis features per tumour cluster.
@@ -155,13 +171,18 @@ def extract_necrosis_features(
         List of dictionaries containing:
             cluster_id, minx, miny, maxx, maxy
 
-        Typically produced by tumor_roi_overlay.
+        Typically produced by tumor_roi_overlay. A single cluster may be
+        represented by several non-overlapping ROI boxes (rows sharing a
+        cluster_id); they are unioned and scored once per cluster.
 
     mpp
         Microns per pixel for the slide.
 
     focal_threshold
         Necrosis fraction below which phenotype is classified as "focal".
+
+    min_fragment_um2
+        Necrosis fragments smaller than this (µm²) are dropped as noise.
 
     Returns
     -------
@@ -173,6 +194,7 @@ def extract_necrosis_features(
         necrosis_perimeter_um
         necrosis_frac
         necrosis_phenotype
+        tissue_area_um2
     """
     from shapely.geometry import box as shapely_box
     from shapely.ops import unary_union
@@ -189,21 +211,17 @@ def extract_necrosis_features(
         raise ValueError("focal_threshold must be between 0 and 1")
 
     # Load all tissue-class polygons once.
-    necrosis_polys = _load_polygons_by_class(
-        geojson_path, NECROSIS_CLASS
-    )
-    tumour_polys = _load_polygons_by_class(
-        geojson_path, TUMOUR_CLASS
-    )
-    stroma_polys = _load_polygons_by_class(
-        geojson_path, STROMA_CLASS
-    )
-    inflam_polys = _load_polygons_by_class(
-        geojson_path, INFLAM_CLASS
-    )
-    others_polys = _load_polygons_by_class(
-        geojson_path, OTHERS_CLASS
-    )
+    necrosis_polys = _load_polygons_by_class(geojson_path, NECROSIS_CLASS)
+    tumour_polys = _load_polygons_by_class(geojson_path, TUMOUR_CLASS)
+    stroma_polys = _load_polygons_by_class(geojson_path, STROMA_CLASS)
+    inflam_polys = _load_polygons_by_class(geojson_path, INFLAM_CLASS)
+    others_polys = _load_polygons_by_class(geojson_path, OTHERS_CLASS)
+
+    # Drop necrosis fragments below the noise floor (physical area).
+    min_fragment_px2 = min_fragment_um2 / (mpp ** 2) if mpp > 0 else 0.0
+    necrosis_polys = [
+        p for p in necrosis_polys if p.area >= min_fragment_px2
+    ]
 
     all_tissue_polys = (
         necrosis_polys
@@ -241,10 +259,7 @@ def extract_necrosis_features(
             for p in necrosis_polys
             if p.intersects(roi_region)
         ]
-        necro_in_roi = [
-            p for p in necro_in_roi
-            if not p.is_empty
-        ]
+        necro_in_roi = [p for p in necro_in_roi if not p.is_empty]
 
         # Total tissue area in cluster.
         tissue_in_roi = [
@@ -252,26 +267,18 @@ def extract_necrosis_features(
             for p in all_tissue_polys
             if p.intersects(roi_region)
         ]
-        tissue_in_roi = [
-            p for p in tissue_in_roi
-            if not p.is_empty
-        ]
+        tissue_in_roi = [p for p in tissue_in_roi if not p.is_empty]
 
-        tissue_area_px2 = sum(
-            p.area for p in tissue_in_roi
-        )
+        tissue_area_px2 = sum(p.area for p in tissue_in_roi)
 
         # Aggregate necrosis measurements.
-        necro_area_px2 = sum(
-            p.area for p in necro_in_roi
-        )
-        necro_perim_px = sum(
-            p.length for p in necro_in_roi
-        )
+        necro_area_px2 = sum(p.area for p in necro_in_roi)
+        necro_perim_px = sum(p.length for p in necro_in_roi)
 
         # Physical units.
         necro_area_um2 = necro_area_px2 * (mpp ** 2)
         necro_perim_um = necro_perim_px * mpp
+        tissue_area_um2 = tissue_area_px2 * (mpp ** 2)
 
         # Fraction of all tissue represented by necrosis.
         if tissue_area_px2 > 0:
@@ -293,9 +300,160 @@ def extract_necrosis_features(
             "necrosis_perimeter_um": round(necro_perim_um, 2),
             "necrosis_frac": round(necro_frac, 4),
             "necrosis_phenotype": phenotype,
+            "tissue_area_um2": round(tissue_area_um2, 2),
         })
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("cluster_id").reset_index(drop=True)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# WSI-level summary
+# ---------------------------------------------------------------------------
+
+def summarise_necrosis_wsi(
+    cluster_df: pd.DataFrame,
+    focal_threshold: float = FOCAL_THRESHOLD,
+) -> pd.DataFrame:
+    """
+    Collapse the per-cluster necrosis table into a single WSI-level row.
+
+    The dominant phenotype is area-weighted: it is the phenotype implied by
+    the whole-slide necrosis fraction (total necrosis area over total tissue
+    area across all scored clusters), using the same focal threshold.
+
+    Returns
+    -------
+    pd.DataFrame with one row and columns:
+        wsi_n_clusters_scored
+        wsi_necrosis_area_um2
+        wsi_necrosis_perimeter_um
+        wsi_necrosis_fraction_of_cluster
+        wsi_dominant_necrosis_phenotype
+    """
+    if cluster_df.empty:
+        return pd.DataFrame([{
+            "wsi_n_clusters_scored": 0,
+            "wsi_necrosis_area_um2": 0.0,
+            "wsi_necrosis_perimeter_um": 0.0,
+            "wsi_necrosis_fraction_of_cluster": 0.0,
+            "wsi_dominant_necrosis_phenotype": "absent",
+        }])
+
+    total_necro_area = float(cluster_df["necrosis_area_um2"].sum())
+    total_necro_perim = float(cluster_df["necrosis_perimeter_um"].sum())
+    total_tissue_area = float(cluster_df.get(
+        "tissue_area_um2", pd.Series(dtype=float)
+    ).sum())
+
+    if total_tissue_area > 0:
+        wsi_frac = total_necro_area / total_tissue_area
+    else:
+        wsi_frac = 0.0
+
+    if total_necro_area <= 0:
+        dominant = "absent"
+    elif wsi_frac < focal_threshold:
+        dominant = "focal"
+    else:
+        dominant = "present"
+
+    return pd.DataFrame([{
+        "wsi_n_clusters_scored": int(len(cluster_df)),
+        "wsi_necrosis_area_um2": round(total_necro_area, 2),
+        "wsi_necrosis_perimeter_um": round(total_necro_perim, 2),
+        "wsi_necrosis_fraction_of_cluster": round(wsi_frac, 4),
+        "wsi_dominant_necrosis_phenotype": dominant,
+    }])
+
+
+# ---------------------------------------------------------------------------
+# Figure
+# ---------------------------------------------------------------------------
+
+_PHENOTYPE_ORDER = ["absent", "focal", "present"]
+_PHENOTYPE_COLORS = {
+    "absent": "#9aa0a6",
+    "focal": "#f9ab00",
+    "present": "#d93025",
+}
+
+
+def plot_necrosis_summary(
+    cluster_df: pd.DataFrame,
+    out_png: str | Path,
+) -> Path:
+    """
+    Render a three-panel necrosis summary figure:
+        (1) necrosis area per cluster
+        (2) necrosis perimeter per cluster
+        (3) phenotype distribution across clusters
+
+    Saves to out_png and returns the path.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    if cluster_df.empty:
+        for ax in axes:
+            ax.text(
+                0.5, 0.5, "No clusters scored",
+                ha="center", va="center", transform=ax.transAxes,
+            )
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.tight_layout()
+        fig.savefig(out_png, dpi=200)
+        plt.close(fig)
+        return out_png
+
+    df = cluster_df.sort_values("cluster_id")
+    cids = df["cluster_id"].astype(str).tolist()
+    bar_colors = [
+        _PHENOTYPE_COLORS.get(p, "#9aa0a6")
+        for p in df["necrosis_phenotype"]
+    ]
+
+    # Panel 1: necrosis area per cluster.
+    axes[0].bar(cids, df["necrosis_area_um2"], color=bar_colors)
+    axes[0].set_title("Necrosis area per cluster")
+    axes[0].set_xlabel("cluster_id")
+    axes[0].set_ylabel("area (µm²)")
+
+    # Panel 2: necrosis perimeter per cluster.
+    axes[1].bar(cids, df["necrosis_perimeter_um"], color=bar_colors)
+    axes[1].set_title("Necrosis perimeter per cluster")
+    axes[1].set_xlabel("cluster_id")
+    axes[1].set_ylabel("perimeter (µm)")
+
+    # Panel 3: phenotype distribution.
+    counts = (
+        df["necrosis_phenotype"]
+        .value_counts()
+        .reindex(_PHENOTYPE_ORDER, fill_value=0)
+    )
+    axes[2].bar(
+        _PHENOTYPE_ORDER,
+        counts.values,
+        color=[_PHENOTYPE_COLORS[p] for p in _PHENOTYPE_ORDER],
+    )
+    axes[2].set_title("Phenotype distribution")
+    axes[2].set_xlabel("phenotype")
+    axes[2].set_ylabel("number of clusters")
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+    return out_png
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +466,7 @@ def extract_necrosis_features_from_csv(
     mpp: float,
     out_csv: str | Path | None = None,
     focal_threshold: float = FOCAL_THRESHOLD,
+    min_fragment_um2: float = MIN_FRAGMENT_UM2,
 ) -> pd.DataFrame:
     """
     Load cluster ROI boxes from CSV and compute necrosis features.
@@ -318,17 +477,23 @@ def extract_necrosis_features_from_csv(
         segmentation_all_classes.geojson
 
     roi_csv_path
-        CSV containing:
-            cluster_id, minx, miny, maxx, maxy
+        CSV containing one row per ROI box:
+            cluster_id, {x_min|minx}, {y_min|miny}, {x_max|maxx}, {y_max|maxy}
+
+        This is tumor_roi_overlay's tumor_roi_boxes.csv, which uses the
+        x_min/x_max spelling; the minx/maxx spelling is also accepted.
 
     mpp
         Microns per pixel.
 
     out_csv
-        Optional output CSV path.
+        Optional output CSV path for the per-cluster table.
 
     focal_threshold
         Fraction separating focal from present.
+
+    min_fragment_um2
+        Necrosis noise floor (µm²).
     """
     roi_csv_path = Path(roi_csv_path)
 
@@ -338,7 +503,7 @@ def extract_necrosis_features_from_csv(
     roi_df = pd.read_csv(roi_csv_path)
 
     # tumor_roi_overlay.py writes bounding-box columns as
-    # x_min/y_min/x_max/y_max; the geometry code below expects
+    # x_min/y_min/x_max/y_max; the geometry code expects
     # minx/miny/maxx/maxy. Accept either spelling and normalise.
     column_aliases = {
         "x_min": "minx",
@@ -354,27 +519,21 @@ def extract_necrosis_features_from_csv(
         }
     )
 
-    required = {
-        "cluster_id",
-        "minx",
-        "miny",
-        "maxx",
-        "maxy",
-    }
-
+    required = {"cluster_id", "minx", "miny", "maxx", "maxy"}
     missing = required - set(roi_df.columns)
     if missing:
         raise ValueError(
             f"ROI CSV missing required columns: {sorted(missing)}"
         )
 
-    cluster_rois = roi_df.to_dict("records")
+    cluster_rois = roi_df[list(required)].to_dict("records")
 
     df = extract_necrosis_features(
         geojson_path=geojson_path,
         cluster_roi_boxes=cluster_rois,
         mpp=mpp,
         focal_threshold=focal_threshold,
+        min_fragment_um2=min_fragment_um2,
     )
 
     if out_csv is not None:
@@ -409,6 +568,8 @@ def run_necrosis_features(
     ------
     cfg.OUT_DIR/<slide>/spatial_feature_results/necrosis_feature/
         necrosis_feature_by_cluster.csv
+        necrosis_feature_wsi_summary.csv
+        necrosis_summary_figure.png
 
     Parameters
     ----------
@@ -423,6 +584,8 @@ def run_necrosis_features(
             cfg.MPP
             cfg.NECROSIS_FOCAL_THRESHOLD
                 Optional; defaults to 0.05.
+            cfg.NECROSIS_MIN_FRAGMENT_UM2
+                Optional; defaults to 500.0.
 
     Returns
     -------
@@ -457,6 +620,8 @@ def run_necrosis_features(
     )
 
     out_csv = out_dir / "necrosis_feature_by_cluster.csv"
+    summary_csv = out_dir / "necrosis_feature_wsi_summary.csv"
+    figure_png = out_dir / "necrosis_summary_figure.png"
 
     if not segmentation_geojson.exists():
         raise FileNotFoundError(
@@ -475,20 +640,22 @@ def run_necrosis_features(
     mpp = getattr(cfg, "MPP", 0.25)
 
     focal_threshold = getattr(
-        cfg,
-        "NECROSIS_FOCAL_THRESHOLD",
-        FOCAL_THRESHOLD,
+        cfg, "NECROSIS_FOCAL_THRESHOLD", FOCAL_THRESHOLD,
+    )
+    min_fragment_um2 = getattr(
+        cfg, "NECROSIS_MIN_FRAGMENT_UM2", MIN_FRAGMENT_UM2,
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'=' * 55}")
     print("  Necrosis features")
-    print(f"  Slide      : {slide_name}")
+    print(f"  Slide       : {slide_name}")
     print(f"  Segmentation: {segmentation_geojson.name}")
     print(f"  Cluster ROI : {roi_csv.name}")
     print(f"  MPP         : {mpp}")
     print(f"  Focal cutoff: {focal_threshold:.3f}")
+    print(f"  Noise floor : {min_fragment_um2:.0f} µm²")
     print(f"  Output      : {out_dir}")
     print(f"{'=' * 55}")
 
@@ -498,23 +665,28 @@ def run_necrosis_features(
         mpp=mpp,
         out_csv=out_csv,
         focal_threshold=focal_threshold,
+        min_fragment_um2=min_fragment_um2,
     )
 
-    # Simple summary.
+    # WSI-level summary.
+    summary_df = summarise_necrosis_wsi(df, focal_threshold=focal_threshold)
+    summary_df.to_csv(summary_csv, index=False)
+    print(f"  Wrote: {summary_csv.name}")
+
+    # Figure.
+    plot_necrosis_summary(df, figure_png)
+    print(f"  Wrote: {figure_png.name}")
+
+    # Console summary.
     n_clusters = len(df)
-    n_absent = int(
-        (df["necrosis_phenotype"] == "absent").sum()
-    )
-    n_focal = int(
-        (df["necrosis_phenotype"] == "focal").sum()
-    )
-    n_present = int(
-        (df["necrosis_phenotype"] == "present").sum()
-    )
-
-    total_necrosis_um2 = float(
-        df["necrosis_area_um2"].sum()
-    )
+    if n_clusters:
+        n_absent = int((df["necrosis_phenotype"] == "absent").sum())
+        n_focal = int((df["necrosis_phenotype"] == "focal").sum())
+        n_present = int((df["necrosis_phenotype"] == "present").sum())
+        total_necrosis_um2 = float(df["necrosis_area_um2"].sum())
+    else:
+        n_absent = n_focal = n_present = 0
+        total_necrosis_um2 = 0.0
 
     print("\n  === Necrosis summary ===")
     print(f"  Clusters:              {n_clusters}")
@@ -532,6 +704,8 @@ def run_necrosis_features(
         "segmentation_geojson": str(segmentation_geojson),
         "roi_csv": str(roi_csv),
         "cluster_csv": str(out_csv),
+        "wsi_csv": str(summary_csv),
+        "figure_png": str(figure_png),
     }
 
 
@@ -543,15 +717,15 @@ def run_necrosis_features(
 #
 # Examples:
 #
-#   python necrosis_features.py \
+#   python -m vispace.necrosis_features \
 #       --wsi-path slides/TCGA-A1-A0SP.svs \
 #       --out-dir vipsegd_output
 #
-#   python necrosis_proximity_features.py \
-#       --from-json run_config.json
+#   python -m vispace.necrosis_features --from-json run_config.json
 #
-# If NECROSIS_FOCAL_THRESHOLD is added to PipelineConfig/config_from_args,
-# it will automatically be available through the shared configuration CLI.
+# If NECROSIS_FOCAL_THRESHOLD / NECROSIS_MIN_FRAGMENT_UM2 are added to
+# PipelineConfig/config_from_args, they are automatically available through
+# the shared configuration CLI.
 
 def main(argv=None) -> None:
     from .config import config_from_args
