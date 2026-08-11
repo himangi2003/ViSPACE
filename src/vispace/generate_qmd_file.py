@@ -1,15 +1,20 @@
+#!/usr/bin/env python3
 """
 report.py
 =========
+
 Generate a ViSpace Quarto pathology report for one whole-slide image.
 
 Output directory
 ----------------
+
     cfg.OUT_DIR/<slide_name>/report/
         vispace_report_slide.qmd
+        vispace_report_style.scss
 
 Usage as a library
 ------------------
+
     from vispace.report import generate_report
     from vispace import cfg
 
@@ -20,6 +25,7 @@ Usage as a library
 
 Usage from the command line
 ---------------------------
+
 This module shares its CLI with config.py.
 
     # Minimal
@@ -42,22 +48,30 @@ This module shares its CLI with config.py.
     python report.py --help
 """
 
-from pathlib import Path
+from __future__ import annotations
+
 import json
 import re
+import shutil
+from importlib.resources import as_file, files
+from pathlib import Path
 from typing import Optional
 
 from .config import PipelineConfig
 
 
-def py_value(value):
+# ---------------------------------------------------------------------------
+# Template helpers
+# ---------------------------------------------------------------------------
+
+def py_value(value) -> str:
     """
     Convert a value into valid Python source code.
     """
     return repr(value)
 
 
-def yaml_value(value):
+def yaml_value(value) -> str:
     """
     Convert a value into a safely quoted YAML scalar.
     """
@@ -68,8 +82,12 @@ def build_parameter_cell(
     wsi_path: str,
     out_dir: str,
 ) -> str:
+    """
+    Build the Quarto Python parameter cell.
+    """
     return f"""```{{python}}
 #| tags: [parameters]
+
 from pathlib import Path
 
 wsi_path = {py_value(wsi_path)}
@@ -84,12 +102,17 @@ def update_yaml_params(
     wsi_path: str,
     out_dir: str,
 ) -> str:
-    params_block = f"""params:
-  wsi_path: {yaml_value(wsi_path)}
-  out_dir: {yaml_value(out_dir)}
-"""
+    """
+    Insert or replace the params block in Quarto YAML front matter.
+    """
+    params_block = (
+        "params:\n"
+        f"  wsi_path: {yaml_value(wsi_path)}\n"
+        f"  out_dir: {yaml_value(out_dir)}\n"
+    )
 
-    front_matter_pattern = r"^---\n(.*?)\n---\n"
+    front_matter_pattern = r"\A---\r?\n(.*?)\r?\n---\r?\n"
+
     match = re.search(
         front_matter_pattern,
         qmd_text,
@@ -98,11 +121,16 @@ def update_yaml_params(
 
     if not match:
         raise ValueError(
-            "Could not find YAML front matter in QMD file."
+            "Could not find YAML front matter in QMD template."
         )
 
     front_matter = match.group(1)
-    params_pattern = r"(?ms)^params:\n(?:^[ \t]+.*\n)*"
+
+    params_pattern = (
+        r"(?ms)"
+        r"^params:\s*\n"
+        r"(?:^[ \t]+.*(?:\n|$))*"
+    )
 
     if re.search(params_pattern, front_matter):
         new_front_matter = re.sub(
@@ -130,9 +158,12 @@ def replace_parameter_cell(
     qmd_text: str,
     parameter_cell: str,
 ) -> str:
+    """
+    Replace the tagged Quarto Python parameters cell.
+    """
     parameter_cell_pattern = (
-        r"```{python}\n"
-        r"#\| tags: \[parameters\]\n"
+        r"```{python}\s*\n"
+        r"#\|\s*tags:\s*\[parameters\]\s*\n"
         r".*?"
         r"```"
     )
@@ -143,17 +174,22 @@ def replace_parameter_cell(
         flags=re.DOTALL,
     ):
         raise ValueError(
-            "Could not find Python parameters cell in QMD file."
+            "Could not find Python parameters cell in QMD template. "
+            "Expected a cell containing '#| tags: [parameters]'."
         )
 
     return re.sub(
         parameter_cell_pattern,
-        parameter_cell,
+        lambda _: parameter_cell,
         qmd_text,
         count=1,
         flags=re.DOTALL,
     )
 
+
+# ---------------------------------------------------------------------------
+# Report generation
+# ---------------------------------------------------------------------------
 
 def generate_report(
     wsi_path: str,
@@ -167,19 +203,23 @@ def generate_report(
 
         cfg.OUT_DIR/<slide_name>/report/vispace_report_slide.qmd
 
-    Only the QMD file is created. The function does not render the report.
+    When the bundled template is used, its SCSS stylesheet is copied beside
+    the generated QMD file.
+
+    The function creates the QMD report source only. It does not invoke Quarto
+    to render HTML or PDF output.
 
     Parameters
     ----------
-    wsi_path
+    wsi_path : str
         Path to the input whole-slide image.
 
-    cfg
+    cfg : PipelineConfig, optional
         Pipeline configuration. Defaults to PipelineConfig().
 
-    template_qmd
-        Optional path to a custom QMD template. When omitted, the bundled
-        ViSpace report template is used.
+    template_qmd : str, optional
+        Path to a custom QMD template. When omitted, the bundled ViSpace
+        report template is used.
 
     Returns
     -------
@@ -207,8 +247,7 @@ def generate_report(
     slide_name = wsi.stem
 
     pipeline_out_dir = Path(
-        getattr(cfg, "OUT_DIR", "")
-        or "vispace_output"
+        getattr(cfg, "OUT_DIR", "") or "vispace_output"
     ).expanduser()
 
     report_dir = (
@@ -222,18 +261,29 @@ def generate_report(
         exist_ok=True,
     )
 
-    if template_qmd is None:
-        from importlib.resources import files
+    # ------------------------------------------------------------------
+    # Load report template
+    # ------------------------------------------------------------------
 
+    using_bundled_template = template_qmd is None
+
+    if using_bundled_template:
         template_resource = files("vispace").joinpath(
             "assets",
             "report",
             "vispace_report_template.qmd",
         )
 
+        if not template_resource.is_file():
+            raise FileNotFoundError(
+                "Bundled ViSpace report template was not found: "
+                "assets/report/vispace_report_template.qmd"
+            )
+
         qmd_text = template_resource.read_text(
             encoding="utf-8",
         )
+
     else:
         template_path = Path(template_qmd).expanduser()
 
@@ -252,8 +302,14 @@ def generate_report(
             encoding="utf-8",
         )
 
+    # Use absolute paths in the generated report so rendering does not
+    # depend on the caller's current working directory.
     resolved_wsi_path = str(wsi.resolve())
     resolved_out_dir = str(pipeline_out_dir.resolve())
+
+    # ------------------------------------------------------------------
+    # Update template parameters
+    # ------------------------------------------------------------------
 
     qmd_text = update_yaml_params(
         qmd_text=qmd_text,
@@ -271,6 +327,10 @@ def generate_report(
         parameter_cell=parameter_cell,
     )
 
+    # ------------------------------------------------------------------
+    # Write generated QMD
+    # ------------------------------------------------------------------
+
     output_path = (
         report_dir
         / "vispace_report_slide.qmd"
@@ -281,13 +341,54 @@ def generate_report(
         encoding="utf-8",
     )
 
+    # ------------------------------------------------------------------
+    # Copy bundled stylesheet
+    # ------------------------------------------------------------------
+    #
+    # The bundled template references:
+    #
+    #     theme: [cosmo, vispace_report_style.scss]
+    #
+    # Copy the stylesheet next to the generated QMD so Quarto can resolve
+    # it regardless of the directory from which Quarto is invoked.
+    #
+    # Do not overwrite a stylesheet already supplied by the user.
+
+    if using_bundled_template:
+        style_name = "vispace_report_style.scss"
+
+        style_resource = files("vispace").joinpath(
+            "assets",
+            "report",
+            style_name,
+        )
+
+        style_dst = report_dir / style_name
+
+        if not style_resource.is_file():
+            raise FileNotFoundError(
+                "Bundled ViSpace report stylesheet was not found: "
+                f"assets/report/{style_name}"
+            )
+
+        if not style_dst.exists():
+            with as_file(style_resource) as style_src:
+                shutil.copyfile(
+                    style_src,
+                    style_dst,
+                )
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
     print(f"\n{'=' * 60}")
     print("  ViSpace Report")
     print(f"  Slide         : {wsi.name}")
     print(f"  Slide path    : {wsi.resolve()}")
     print(f"  Report file   : {output_path.resolve()}")
     print(f"  Output folder : {report_dir.resolve()}")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 60}\n")
 
     return output_path.resolve()
 
