@@ -175,6 +175,7 @@ def extract_necrosis_features(
         necrosis_phenotype
     """
     from shapely.geometry import box as shapely_box
+    from shapely.ops import unary_union
 
     geojson_path = Path(geojson_path)
 
@@ -212,23 +213,33 @@ def extract_necrosis_features(
         + others_polys
     )
 
-    rows = []
-
+    # A single tumour cluster is tiled by one or more non-overlapping ROI
+    # boxes in tumor_roi_boxes.csv, so group the boxes by cluster_id and
+    # score each cluster once. Unioning a cluster's boxes into a single
+    # region (rather than looping box-by-box) both collapses the output to
+    # one row per cluster and avoids double-counting necrosis perimeter
+    # along shared internal box edges.
+    boxes_by_cluster: dict = {}
     for roi in cluster_roi_boxes:
-        cid = roi["cluster_id"]
-
-        roi_box = shapely_box(
-            roi["minx"],
-            roi["miny"],
-            roi["maxx"],
-            roi["maxy"],
+        boxes_by_cluster.setdefault(roi["cluster_id"], []).append(
+            shapely_box(
+                roi["minx"],
+                roi["miny"],
+                roi["maxx"],
+                roi["maxy"],
+            )
         )
 
-        # Necrosis intersecting this cluster ROI.
+    rows = []
+
+    for cid, cluster_boxes in boxes_by_cluster.items():
+        roi_region = unary_union(cluster_boxes)
+
+        # Necrosis intersecting this cluster region.
         necro_in_roi = [
-            p.intersection(roi_box)
+            p.intersection(roi_region)
             for p in necrosis_polys
-            if p.intersects(roi_box)
+            if p.intersects(roi_region)
         ]
         necro_in_roi = [
             p for p in necro_in_roi
@@ -237,9 +248,9 @@ def extract_necrosis_features(
 
         # Total tissue area in cluster.
         tissue_in_roi = [
-            p.intersection(roi_box)
+            p.intersection(roi_region)
             for p in all_tissue_polys
-            if p.intersects(roi_box)
+            if p.intersects(roi_region)
         ]
         tissue_in_roi = [
             p for p in tissue_in_roi
