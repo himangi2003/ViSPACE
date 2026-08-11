@@ -249,7 +249,7 @@ Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by t
 | 4 | Tumour ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-tumour-content ROI boxes |
 | 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per tumour cluster |
 | 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–tumour boundary distance features |
-| 7 | Necrosis Proximity | `vispace.necrosis_proximity_features` | Necrosis–tumour & necrosis–immune distance features |
+| 7 | Necrosis Features | `vispace.necrosis_features` | Necrosis area, perimeter, and phenotype per tumour cluster |
 | 8 | Tumour Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
 
 **Segmentation classes:** Tumour · Stroma · Necrosis · Inflammatory (TILs) · Others
@@ -341,7 +341,7 @@ vispace --from-json run_config.json
 ```bash
 # run only a subset of stages (prerequisites must already exist)
 vispace --from-json run_config.json \
-    --stages cluster_tils_tsr_score,immune_proximity,necrosis_proximity
+    --stages cluster_tils_tsr_score,immune_proximity,necrosis_features
 
 # force specific stages to re-run even if output exists
 vispace --from-json run_config.json \
@@ -374,9 +374,8 @@ python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json --tils-de
 python -m vispace.immune_proximity_features --from-json run_config.json
 python -m vispace.immune_proximity_features --from-json run_config.json --immune-contact-tolerance-um 10
 
-# 3g. necrosis proximity features
-python -m vispace.necrosis_proximity_features --from-json run_config.json
-python -m vispace.necrosis_proximity_features --from-json run_config.json --necrosis-immune-coupling-threshold-um 150
+# 3g. necrosis features
+python -m vispace.necrosis_features --from-json run_config.json
 
 # 3h. tumor morphology features
 python -m vispace.tumor_morphology_features --from-json run_config.json
@@ -397,7 +396,7 @@ python -m vispace.tumor_morphology_features --from-json run_config.json --morpho
 | 4 | `vispace.tumor_roi_overlay` | Cluster tumor tiles, build ROI boxes | `python -m vispace.tumor_roi_overlay --from-json run_config.json` |
 | 5 | `vispace.cluster_tils_tsr_scoring` | TSR + sTILs scoring per cluster | `python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json` |
 | 6 | `vispace.immune_proximity_features` | TIL proximity to tumor boundary | `python -m vispace.immune_proximity_features --from-json run_config.json` |
-| 7 | `vispace.necrosis_proximity_features` | Necrosis proximity + phenotyping | `python -m vispace.necrosis_proximity_features --from-json run_config.json` |
+| 7 | `vispace.necrosis_features` | Necrosis area / perimeter / phenotype per cluster | `python -m vispace.necrosis_features --from-json run_config.json` |
 | 8 | `vispace.tumor_morphology_features` | Tumor shape / fragmentation features | `python -m vispace.tumor_morphology_features --from-json run_config.json` |
 | — | `vispace.run_vispace` | Orchestrates stages 1–8, resumable | `vispace --from-json run_config.json` |
 | — | `vispace.generate_qmd_file` | Build the Quarto `.qmd` report (library function) | `from vispace import generate_report` |
@@ -443,7 +442,7 @@ Completed stages are automatically skipped (sentinel-file check). To run only sp
 # Re-run only scoring stages (segmentation must already exist)
 results = run_vispace(
     "histology/slide.svs", cfg,
-    stages={"cluster_tils_tsr_score", "immune_proximity", "necrosis_proximity"},
+    stages={"cluster_tils_tsr_score", "immune_proximity", "necrosis_features"},
 )
 
 # Force a specific stage to re-run even if output exists
@@ -457,7 +456,7 @@ from vispace import run_stage
 result = run_stage("tumor_morphology", "histology/slide.svs", cfg, force=True)
 ```
 
-Valid stage names: `tessellation` · `segmentation` · `stitching` · `tumor_roi_overlay` · `cluster_tils_tsr_score` · `immune_proximity` · `necrosis_proximity` · `tumor_morphology`
+Valid stage names: `tessellation` · `segmentation` · `stitching` · `tumor_roi_overlay` · `cluster_tils_tsr_score` · `immune_proximity` · `necrosis_features` · `tumor_morphology`
 
 ---
 
@@ -495,11 +494,10 @@ cfg.OUT_DIR/
         │   ├── immune_proximity_wsi_summary.csv
         │   └── immune_proximity_plot.png
         │
-        ├── necrosis_proximity/
-        │   ├── necrosis_proximity_by_cluster.csv
-        │   ├── necrosis_proximity_wsi_summary.csv
-        │   ├── necrosis_distance_figure.png
-        │   └── necrosis_tissue_context_figure.png
+        ├── necrosis_feature/
+        │   ├── necrosis_feature_by_cluster.csv
+        │   ├── necrosis_feature_wsi_summary.csv
+        │   └── necrosis_summary_figure.png
         │
         └── tumor_morphology/
             ├── tumor_core_features_by_cluster.csv
@@ -543,14 +541,18 @@ Column names below match the actual CSV headers written by each script. Each tab
 | `til_extratumoral_distance_aw_median_um` | Area-weighted median distance for extratumoral TILs |
 | `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` |
 
-### Necrosis Proximity (`necrosis_proximity_by_cluster.csv`)
+### Necrosis Features (`necrosis_feature_by_cluster.csv`)
 
 | Column | Description |
 |--------|-------------|
-| `necrosis_pct_within_50um` / `_100um` | % necrosis area within each distance of the tumour boundary |
-| `necrosis_immune_coupling_index` | Fraction of necrosis area within the immune-coupling threshold |
-| `necrosis_fraction_intratumoral` | Fraction of necrosis located inside the tumour |
-| `necrosis_phenotype` | `necrosis-absent` / `tumour-central` / `peritumoural` / `immune-adjacent` / `stral-distant` |
+| `cluster_id` | Spatial tumour cluster identifier |
+| `necrosis_area_um2` | Total necrosis polygon area in the cluster (µm²) |
+| `necrosis_perimeter_um` | Total necrosis polygon perimeter in the cluster (µm) |
+| `necrosis_frac` | Necrosis area / total tissue area in the cluster |
+| `necrosis_phenotype` | `absent` / `focal` (frac < 5%) / `present` (frac ≥ 5%) |
+| `tissue_area_um2` | Total tissue area in the cluster (µm², context for the fraction) |
+
+Necrosis fragments below 500 µm² are treated as segmentation noise and excluded. A WSI-level roll-up (`necrosis_feature_wsi_summary.csv`) reports the area-weighted dominant phenotype and slide totals.
 
 ### Tumour Morphology (`tumor_core_features_by_cluster.csv`)
 
