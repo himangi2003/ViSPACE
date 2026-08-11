@@ -105,8 +105,8 @@ class PipelineConfig:
     WHITE_THRESH:   int   = 220                 # background pixel threshold
 
     # ── Slide geometry ──────────────────────────────────────────────────────
-    STEP_X:         int   = 444                 # WSI tile spacing x (px) — informational
-    STEP_Y:         int   = 444                 # WSI tile spacing y (px) — informational
+    STEP_X:         int   = None                 # WSI tile spacing x (px) — informational
+    STEP_Y:         int   = None                 # WSI tile spacing y (px) — informational
     MAX_PX:         int   = 4096                # max output PNG long edge
 
     # ── Stitch / visualisation ──────────────────────────────────────────────
@@ -114,10 +114,10 @@ class PipelineConfig:
     THUMB_MAX:      int   = 2048                # thumbnail max size
 
     # ── Stage 4: Tumor ROI Overlay ──────────────────────────────────────────
-    ROI_SIZE_UM:           float = 200.0   # ROI box edge in microns
+    ROI_SIZE_UM:           float = 50.00   # ROI box edge in microns
     ROI_MIN_TUMOR_FRAC:    float = 0.20    # min frac_Tumour to keep a tile
     ROI_MAX_NECROSIS:      float = 0.50    # max mean frac_Necrosis inside a box
-    ROI_MIN_CLUSTER_TILES: int   = 3       # min tiles to keep a tumour clump
+    ROI_MIN_CLUSTER_TILES: int   = 5       # min tiles to keep a tumour clump
     ROI_CONNECTIVITY:      int   = 8       # grid connectivity: 4 or 8
     ROI_MERGE_GAP_UM:      float = 60.0    # clumps within this gap (µm) are merged
     ROI_THUMB_WIDTH:       int   = 1800    # WSI thumbnail width for overlay PNG
@@ -128,7 +128,7 @@ class PipelineConfig:
     #   "salgado"                   → Inflammatory / Stroma             (recommended)
     #   "stroma_plus_inflammatory"  → Inflammatory / (Stroma + Inflam)
     #   "tissue"                    → Inflammatory / viable tissue
-    CLUSTER_BUFFER_UM:           float = 300.0  # buffer around ROI boxes → scoring polygon
+    CLUSTER_BUFFER_UM:           float = 50.0  # buffer around ROI boxes → scoring polygon
     CLUSTER_MIN_ROI_BOXES:       int   = 1     # min ROI boxes to keep a cluster
     CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0   # minimum GeoJSON polygon area filter
     CLUSTER_MAX_AREA_QUANTILE:   float = 1.0    # upper area quantile filter (1.0 = off)
@@ -148,16 +148,19 @@ class PipelineConfig:
     IMMUNE_EXCLUDED_MIN_MEDIAN_UM:    float = 100.0  # median ≥ this → immune-excluded
     IMMUNE_PERITUMORAL_MAX_MEDIAN_UM: float = 100.0  # median < this → peritumoral
 
-    # ── Stage 7: Necrosis proximity features ───────────────────────────────
-    NECROSIS_PROXIMITY_THRESHOLDS_UM:      list  = field(default_factory=lambda: [50.0, 100.0])
-    NECROSIS_CONTACT_TOLERANCE_UM:         float = 5.0    # necrosis within this = "contact"
-    NECROSIS_IMMUNE_COUPLING_THRESHOLD_UM: float = 20.0  # necrosis within this of immune = coupled
-    NECROSIS_MIN_COMPONENT_AREA_UM2:       float = 500.0  # noise filter for shape analysis
-    NECROSIS_ABSENT_MAX_AREA_UM2:          float = 500.0  # < this → necrosis-absent phenotype
-    NECROSIS_CENTRAL_MIN_INTRA_FRAC:       float = 0.50   # ≥ this intratumoral → tumour-central
-    NECROSIS_PERITUMOURAL_MIN_PCT_100UM:   float = 60.0   # ≥ this % within 100µm → peritumoural
-    NECROSIS_IMMUNE_ADJACENT_MIN_COUPLING: float = 0.20   # ≥ this coupling → immune-adjacent
-    NECROSIS_DISTANT_MIN_MEDIAN_UM:        float = 150.0  # median ≥ this → stromal-distant
+    # ── Stage 7: Necrosis proximity features ─────────────────────────────────
+    NECROSIS_MIN_COMPONENT_AREA_UM2: float = 500.0
+    # Noise filter: necrosis polygon components smaller than this (µm²) are
+    # excluded from area and perimeter computation. Removes segmentation
+    # artefacts at tile boundaries without affecting genuine necrotic foci.
+    
+    NECROSIS_FOCAL_THRESHOLD: float = 0.05
+    # Fraction threshold separating focal from present phenotype.
+    # Clusters with necrosis_frac < NECROSIS_FOCAL_THRESHOLD are classified
+    # as focal (punctate foci); those >= threshold are classified as present
+    # (geographic / confluent necrosis). Default 0.05 (5%) reflects standard
+    # histopathological practice for distinguishing minor from significant
+    # necrosis in invasive breast carcinoma (WHO 2019).
 
     # ── Stage 8: Tumour morphology features ────────────────────────────────
     MORPHOLOGY_MIN_ISLAND_AREA_UM2: float = 1_000.0

@@ -47,7 +47,7 @@ from .stitch import run_stitching
 from .tumor_roi_overlay import run_tumor_roi_overlay
 from .cluster_tils_tsr_scoring import run_cluster_tils_tsr_score
 from .immune_proximity_features import run_immune_proximity_features
-from .necrosis_proximity_features import run_necrosis_proximity_features
+from .necrosis_features import run_necrosis_features
 from .tumor_morphology_features import run_tumor_morphology_features
 
 # --- Reporting ---------------------------------------------------------------
@@ -72,7 +72,7 @@ __all__ = [
     "run_tumor_roi_overlay",
     "run_cluster_tils_tsr_score",
     "run_immune_proximity_features",
-    "run_necrosis_proximity_features",
+    "run_necrosis_features",
     "run_tumor_morphology_features",
     # reporting
     "generate_report",

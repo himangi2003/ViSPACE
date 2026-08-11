@@ -1,6 +1,50 @@
+"""
+report.py
+=========
+Generate a ViSpace Quarto pathology report for one whole-slide image.
+
+Output directory
+----------------
+    cfg.OUT_DIR/<slide_name>/report/
+        vispace_report_slide.qmd
+
+Usage as a library
+------------------
+    from vispace.report import generate_report
+    from vispace import cfg
+
+    report_path = generate_report(
+        wsi_path=cfg.WSI_PATH,
+        cfg=cfg,
+    )
+
+Usage from the command line
+---------------------------
+This module shares its CLI with config.py.
+
+    # Minimal
+    python report.py --wsi-path slides/TCGA-A1-A0SP.svs
+
+    # Custom output root
+    python report.py \
+        --wsi-path slides/TCGA-A1-A0SP.svs \
+        --out-dir vispace_output
+
+    # Continue from a saved configuration
+    python report.py --from-json run_config.json
+
+    # Override a saved value
+    python report.py \
+        --from-json run_config.json \
+        --out-dir another_output
+
+    # Display available flags
+    python report.py --help
+"""
+
 from pathlib import Path
-import re
 import json
+import re
 from typing import Optional
 
 from .config import PipelineConfig
@@ -8,25 +52,21 @@ from .config import PipelineConfig
 
 def py_value(value):
     """
-    Convert value into valid Python code.
-    Example:
-        TNBC -> 'TNBC'
-        0.9  -> 0.9
+    Convert a value into valid Python source code.
     """
     return repr(value)
 
 
 def yaml_value(value):
     """
-    JSON string literals are valid YAML scalars.
-    This safely handles spaces, quotes, etc.
+    Convert a value into a safely quoted YAML scalar.
     """
     return json.dumps(value)
 
 
 def build_parameter_cell(
     wsi_path: str,
-    out_dir: str
+    out_dir: str,
 ) -> str:
     return f"""```{{python}}
 #| tags: [parameters]
@@ -50,13 +90,18 @@ def update_yaml_params(
 """
 
     front_matter_pattern = r"^---\n(.*?)\n---\n"
-    match = re.search(front_matter_pattern, qmd_text, flags=re.DOTALL)
+    match = re.search(
+        front_matter_pattern,
+        qmd_text,
+        flags=re.DOTALL,
+    )
 
     if not match:
-        raise ValueError("Could not find YAML front matter in QMD file.")
+        raise ValueError(
+            "Could not find YAML front matter in QMD file."
+        )
 
     front_matter = match.group(1)
-
     params_pattern = r"(?ms)^params:\n(?:^[ \t]+.*\n)*"
 
     if re.search(params_pattern, front_matter):
@@ -67,19 +112,24 @@ def update_yaml_params(
             count=1,
         )
     else:
-        new_front_matter = front_matter.rstrip() + "\n" + params_block
+        new_front_matter = (
+            front_matter.rstrip()
+            + "\n"
+            + params_block
+        )
 
-    updated_qmd = (
+    return (
         "---\n"
         + new_front_matter.rstrip()
         + "\n---\n"
         + qmd_text[match.end():]
     )
 
-    return updated_qmd
 
-
-def replace_parameter_cell(qmd_text: str, parameter_cell: str) -> str:
+def replace_parameter_cell(
+    qmd_text: str,
+    parameter_cell: str,
+) -> str:
     parameter_cell_pattern = (
         r"```{python}\n"
         r"#\| tags: \[parameters\]\n"
@@ -87,8 +137,14 @@ def replace_parameter_cell(qmd_text: str, parameter_cell: str) -> str:
         r"```"
     )
 
-    if not re.search(parameter_cell_pattern, qmd_text, flags=re.DOTALL):
-        raise ValueError("Could not find Python parameters cell in QMD file.")
+    if not re.search(
+        parameter_cell_pattern,
+        qmd_text,
+        flags=re.DOTALL,
+    ):
+        raise ValueError(
+            "Could not find Python parameters cell in QMD file."
+        )
 
     return re.sub(
         parameter_cell_pattern,
@@ -103,68 +159,162 @@ def generate_report(
     wsi_path: str,
     cfg: Optional[PipelineConfig] = None,
     template_qmd: Optional[str] = None,
-    output_qmd: Optional[str] = None,
 ) -> Path:
     """
-    Generate a QMD pathology report file from PipelineConfig.
+    Generate the ViSpace QMD pathology report.
 
-    Writes the ``.qmd`` file and, when the bundled template is used, stages
-    its stylesheet next to the output so the report renders self-contained
-    from any working directory. It does not render the report itself.
+    The report is written to:
 
-    ``template_qmd`` defaults to the report template bundled inside the
-    installed package; pass a path to override it with your own template.
+        cfg.OUT_DIR/<slide_name>/report/vispace_report_slide.qmd
+
+    Only the QMD file is created. The function does not render the report.
+
+    Parameters
+    ----------
+    wsi_path
+        Path to the input whole-slide image.
+
+    cfg
+        Pipeline configuration. Defaults to PipelineConfig().
+
+    template_qmd
+        Optional path to a custom QMD template. When omitted, the bundled
+        ViSpace report template is used.
+
+    Returns
+    -------
+    Path
+        Absolute path to the generated QMD file.
     """
-
     if cfg is None:
         cfg = PipelineConfig()
 
-    used_bundled_template = template_qmd is None
-    if template_qmd is None:
-        from importlib.resources import files
-        template_qmd = str(
-            files("vispace").joinpath("assets", "report", "vispace_report_template.qmd")
+    if not wsi_path:
+        raise ValueError("wsi_path cannot be empty.")
+
+    wsi = Path(wsi_path).expanduser()
+
+    if not wsi.exists():
+        raise FileNotFoundError(
+            f"Whole-slide image not found: {wsi}"
         )
 
-    out_dir = getattr(cfg, "OUT_DIR", "") or "vispace_output"
+    if not wsi.is_file():
+        raise FileNotFoundError(
+            f"WSI path is not a file: {wsi}"
+        )
 
-    template_path = Path(template_qmd)
-    qmd_text = template_path.read_text(encoding="utf-8")
+    slide_name = wsi.stem
+
+    pipeline_out_dir = Path(
+        getattr(cfg, "OUT_DIR", "")
+        or "vispace_output"
+    ).expanduser()
+
+    report_dir = (
+        pipeline_out_dir
+        / slide_name
+        / "report"
+    )
+
+    report_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if template_qmd is None:
+        from importlib.resources import files
+
+        template_resource = files("vispace").joinpath(
+            "assets",
+            "report",
+            "vispace_report_template.qmd",
+        )
+
+        qmd_text = template_resource.read_text(
+            encoding="utf-8",
+        )
+    else:
+        template_path = Path(template_qmd).expanduser()
+
+        if not template_path.exists():
+            raise FileNotFoundError(
+                f"Report template not found: {template_path}"
+            )
+
+        if not template_path.is_file():
+            raise FileNotFoundError(
+                f"Report template path is not a file: "
+                f"{template_path}"
+            )
+
+        qmd_text = template_path.read_text(
+            encoding="utf-8",
+        )
+
+    resolved_wsi_path = str(wsi.resolve())
+    resolved_out_dir = str(pipeline_out_dir.resolve())
 
     qmd_text = update_yaml_params(
         qmd_text=qmd_text,
-        wsi_path=wsi_path,
-        out_dir=out_dir
+        wsi_path=resolved_wsi_path,
+        out_dir=resolved_out_dir,
     )
 
     parameter_cell = build_parameter_cell(
-        wsi_path=wsi_path,
-        out_dir=out_dir
+        wsi_path=resolved_wsi_path,
+        out_dir=resolved_out_dir,
     )
 
-    qmd_text = replace_parameter_cell(qmd_text, parameter_cell)
+    qmd_text = replace_parameter_cell(
+        qmd_text=qmd_text,
+        parameter_cell=parameter_cell,
+    )
 
-    slide_name = Path(wsi_path).stem
+    output_path = (
+        report_dir
+        / "vispace_report_slide.qmd"
+    )
 
-    if output_qmd is None:
-        output_qmd = "vispace_report_slide.qmd"
+    output_path.write_text(
+        qmd_text,
+        encoding="utf-8",
+    )
 
-    output_path = Path(output_qmd)
-    output_path.write_text(qmd_text, encoding="utf-8")
+    print(f"\n{'=' * 60}")
+    print("  ViSpace Report")
+    print(f"  Slide         : {wsi.name}")
+    print(f"  Slide path    : {wsi.resolve()}")
+    print(f"  Report file   : {output_path.resolve()}")
+    print(f"  Output folder : {report_dir.resolve()}")
+    print(f"{'=' * 60}")
 
-    # Stage the stylesheet the bundled template references (theme:
-    # vipspace_report_style.scss) next to the output, so Quarto can render
-    # the report regardless of the working directory. Never clobber a
-    # stylesheet the user has already placed there.
-    if used_bundled_template:
-        import shutil
-        from importlib.resources import as_file, files
+    return output_path.resolve()
 
-        style_name = "vipspace_report_style.scss"
-        style_dst = output_path.parent / style_name
-        if not style_dst.exists():
-            style_src = files("vispace").joinpath("assets", "report", style_name)
-            with as_file(style_src) as real_path:
-                shutil.copyfile(real_path, style_dst)
 
-    return output_path
+# =========================================================================
+# CLI entry point
+# =========================================================================
+
+def main(argv=None) -> None:
+    """
+    Generate a report using arguments handled by config.py.
+    """
+    from .config import config_from_args
+
+    cfg, _ = config_from_args(argv)
+
+    if not cfg.WSI_PATH or cfg.WSI_PATH == "your data path":
+        raise SystemExit(
+            "--wsi-path is required. Provide a path to a whole-slide "
+            "image directly or through --from-json."
+        )
+
+    generate_report(
+        wsi_path=cfg.WSI_PATH,
+        cfg=cfg,
+    )
+
+
+if __name__ == "__main__":
+    main()

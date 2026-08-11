@@ -16,7 +16,7 @@ Pipeline stages
 4.  run_tumor_roi_overlay     tumor_roi_overlay.py
 5.  run_cluster_tils_tsr_score cluster_tils_tsr_score.py
 6.  run_immune_proximity_features    immune_proximity_features.py
-7.  run_necrosis_proximity_features  necrosis_proximity_features.py
+7.  run_necrosis_features necrosis_features.py
 8.  run_tumor_morphology_features    tumor_morphology_features.py
 
 Directory layout produced
@@ -38,7 +38,7 @@ cfg.OUT_DIR/<slide_name>/
             tumor_roi_boxes_pseudo_thumbnail.png
             tumor_roi_boxes_wsi_thumbnail.png   (when WSI is on disk)
 
-        cluster_tils_tsr_score/
+        cluster_tils_tsr_score/necrosis_
             cluster_scoring_polygons.geojson
             tils_tsr_by_cluster.csv
             tils_tsr_wsi_summary.csv
@@ -49,11 +49,11 @@ cfg.OUT_DIR/<slide_name>/
             immune_proximity_wsi_summary.csv
             immune_proximity_plot.png
 
-        necrosis_proximity/
-            necrosis_proximity_by_cluster.csv
-            necrosis_proximity_wsi_summary.csv
-            necrosis_distance_figure.png
-            necrosis_tissue_context_figure.png
+      necrosis_feature/
+          necrosis_feature_by_cluster.csv
+          necrosis_feature_wsi_summary.csv
+           necrosis_featuredistance_figure.png
+           necrosis_featuretissue_context_figure.png
 
         tumor_morphology/
             tumor_core_features_by_cluster.csv
@@ -125,7 +125,7 @@ from .stitch                      import run_stitching
 from .tumor_roi_overlay           import run_tumor_roi_overlay
 from .cluster_tils_tsr_scoring    import run_cluster_tils_tsr_score
 from .immune_proximity_features   import run_immune_proximity_features
-from .necrosis_proximity_features import run_necrosis_proximity_features
+from .necrosis_features           import run_necrosis_features
 from .tumor_morphology_features   import run_tumor_morphology_features
 
 
@@ -138,17 +138,34 @@ from .tumor_morphology_features   import run_tumor_morphology_features
 def _sentinel(wsi_path: str, cfg: PipelineConfig) -> dict:
     """Return {stage_name: Path} for the primary output of every stage."""
     slide_name = Path(wsi_path).stem
-    root       = Path(cfg.OUT_DIR) / slide_name
-    sf         = root / "spatial_feature_results"
+    root = Path(cfg.OUT_DIR) / slide_name
+    sf = root / "spatial_feature_results"
+
     return {
-        "tessellation":   root / "tessellation" / f"{slide_name}.h5",
-        "segmentation":   root / "segmentation" / "manifest.csv",
-        "stitching":      root / "segmentation" / "segmentation_all_classes.geojson",
-        "tumor_roi_overlay":         sf / "tumor_roi_overlay"    / "tumor_roi_boxes.csv",
-        "cluster_tils_tsr_score":    sf / "cluster_tils_tsr_score" / "tils_tsr_by_cluster.csv",
-        "immune_proximity":          sf / "immune_proximity"     / "immune_proximity_by_cluster.csv",
-        "necrosis_proximity":        sf / "necrosis_proximity"   / "necrosis_proximity_by_cluster.csv",
-        "tumor_morphology":          sf / "tumor_morphology"     / "tumor_core_features_by_cluster.csv",
+        "tessellation": (
+            root / "tessellation" / f"{slide_name}.h5"
+        ),
+        "segmentation": (
+            root / "segmentation" / "manifest.csv"
+        ),
+        "stitching": (
+            root / "segmentation" / "segmentation_all_classes.geojson"
+        ),
+        "tumor_roi_overlay": (
+            sf / "tumor_roi_overlay" / "tumor_roi_boxes.csv"
+        ),
+        "cluster_tils_tsr_score": (
+            sf / "cluster_tils_tsr_score" / "tils_tsr_by_cluster.csv"
+        ),
+        "immune_proximity": (
+            sf / "immune_proximity" / "immune_proximity_by_cluster.csv"
+        ),
+        "necrosis_features": (
+            sf / "necrosis_feature" / "necrosis_feature_by_cluster.csv"
+        ),
+        "tumor_morphology": (
+            sf / "tumor_morphology" / "tumor_core_features_by_cluster.csv"
+        ),
     }
 
 
@@ -157,14 +174,14 @@ def _sentinel(wsi_path: str, cfg: PipelineConfig) -> dict:
 # ---------------------------------------------------------------------------
 
 _STAGES = [
-    ("tessellation",           run_tessellation),
-    ("segmentation",           run_segmentation),
-    ("stitching",              run_stitching),
-    ("tumor_roi_overlay",      run_tumor_roi_overlay),
+    ("tessellation", run_tessellation),
+    ("segmentation", run_segmentation),
+    ("stitching", run_stitching),
+    ("tumor_roi_overlay", run_tumor_roi_overlay),
     ("cluster_tils_tsr_score", run_cluster_tils_tsr_score),
-    ("immune_proximity",       run_immune_proximity_features),
-    ("necrosis_proximity",     run_necrosis_proximity_features),
-    ("tumor_morphology",       run_tumor_morphology_features),
+    ("immune_proximity", run_immune_proximity_features),
+    ("necrosis_features", run_necrosis_features),
+    ("tumor_morphology", run_tumor_morphology_features),
 ]
 
 ALL_STAGE_NAMES = [name for name, _ in _STAGES]
@@ -201,7 +218,7 @@ def run_vispace(
         pipeline has already been executed.
         Valid names: tessellation, segmentation, stitching,
                      tumor_roi_overlay, cluster_tils_tsr_score,
-                     immune_proximity, necrosis_proximity, tumor_morphology
+                     immune_proximity,necrosis_, tumor_morphology
 
     force_stages : set of str, optional
         Stage names that must re-run even if their output already exists.

@@ -1,9 +1,9 @@
 ---
-title: "ViP-SegD Pathology Report"
+title: "ViSpace Pathology Report"
 subtitle: "Whole-Slide Tissue Segmentation & Tumour Microenvironment Analysis"
 format:
   html:
-    theme: [cosmo, vipspace_report_style.scss]
+    theme: [cosmo, vispace_report_style.scss]
     toc: true
     toc-depth: 3
     toc-title: "Contents"
@@ -54,7 +54,7 @@ import pandas as pd
 import numpy as np
 from IPython.display import display, Markdown, HTML
 
-# ── Paths: ViP-SegD output tree under out_dir/<slide_name>/ ─────────────────
+# ── Paths: ViSpace output tree under out_dir/<slide_name>/ ─────────────────
 root  = Path(out_dir) / slide_name
 tess  = root / "tessellation"
 seg   = root / "segmentation"
@@ -153,11 +153,15 @@ def badge(text, color):
 def phenotype_color(ph):
     ph = str(ph).lower()
     palette = {
+        # immune phenotypes
         "penetrated": "#68e08b", "peritumoral": "#69c2ff", "margin": "#ffd166",
-        "excluded": "#ff8d6e", "desert": "#b4bdc8", "absent": "#aab5c2",
-        "tumour-central": "#ff6b7a", "tumor-central": "#ff6b7a",
-        "peritumoural": "#ffbf69", "immune-adjacent": "#c7a9ff",
-        "stromal-distant": "#6db8ff", "indeterminate": "#c5d0dd",
+        "excluded": "#ff8d6e", "desert": "#b4bdc8",
+        # necrosis phenotypes (3-tier: absent / focal / present)
+        "absent":  "#aab5c2",
+        "focal":   "#ffbf69",
+        "present": "#ff6b7a",
+        # fallback
+        "indeterminate": "#c5d0dd",
     }
     for k, c in palette.items():
         if k in ph:
@@ -236,7 +240,7 @@ def cluster_chips(df, fields, badge_field=None, badge_color_fn=None, max_cards=1
         d = d.sort_values("cluster_id")
     if len(d) > max_cards:
         # Keep report readable: show tumour/feature-rich clusters first when possible.
-        priority_cols = ["tumor_area_mm2", "til_area_total_um2", "necrosis_area_total_um2", "cluster_area_mm2"]
+        priority_cols = ["tumor_area_mm2", "til_area_total_um2", "necrosis_area_um2", "cluster_area_mm2"]
         for c in priority_cols:
             if c in d.columns:
                 d = d.sort_values(c, ascending=False)
@@ -489,11 +493,42 @@ IMMUNE_SCALES = [
 ]
 
 NECROSIS_SCALES = [
-    {"label":"Necrosis fraction", "cols":"wsi_necrosis_fraction_of_cluster", "lo":0, "hi":1, "low":"absent/rare", "high":"necrosis-rich", "kind":"pct_frac", "meaning":"Necrotic area divided by analysed cluster area."},
-    {"label":"Intratumoral necrosis", "cols":"wsi_necrosis_fraction_intratumoral", "lo":0, "hi":1, "low":"outside tumour", "high":"tumour-central", "kind":"pct_frac", "meaning":"Fraction of necrosis area within tumour polygons."},
-    {"label":"Necrosis contact", "cols":"wsi_necrosis_contact_fraction", "lo":0, "hi":1, "low":"away from boundary", "high":"boundary-contacting", "kind":"pct_frac", "meaning":"Necrosis area within contact tolerance of tumour boundary. The necrosis script uses 5 µm by default."},
-    {"label":"Necrosis within 100 µm", "cols":"wsi_necrosis_pct_within_100um", "lo":0, "hi":100, "low":"distant", "high":"peritumoural", "kind":"pct", "meaning":"Area-weighted percentage of necrosis components within 100 µm of tumour boundary."},
-    {"label":"Immune coupling", "cols":"wsi_necrosis_immune_coupling_index", "lo":0, "hi":1, "low":"uncoupled", "high":"immune-adjacent", "kind":"pct_frac", "meaning":"Fraction of necrosis area close to inflammatory regions. Default immune-coupling threshold is 100 µm."},
+    {
+        "label": "Necrosis fraction",
+        "cols": ["wsi_necrosis_fraction_of_cluster", "wsi_necrosis_fraction", "wsi_necrosis_frac"],
+        "lo": 0, "hi": 1,
+        "low": "absent / rare", "high": "necrosis-rich",
+        "kind": "pct_frac",
+        "meaning": (
+            "Necrosis area divided by total segmented tissue area in the analysed cluster. "
+            "Drives the phenotype classification: 0 → absent; below focal threshold (default 5%) → focal; "
+            "above threshold → present."
+        ),
+    },
+    {
+        "label": "Necrosis area",
+        "cols": ["wsi_necrosis_area_um2", "wsi_necrosis_area_total_um2", "wsi_necrosis_area_mm2"],
+        "lo": 0, "hi": 500000,
+        "low": "minimal", "high": "extensive",
+        "kind": "um",
+        "meaning": (
+            "Total necrosis polygon area within scored clusters, in µm². "
+            "Computed after excluding sub-threshold fragments (default < 500 µm²). "
+            "Zero indicates no necrosis detected."
+        ),
+    },
+    {
+        "label": "Necrosis perimeter",
+        "cols": ["wsi_necrosis_perimeter_um", "wsi_necrosis_total_perimeter_um"],
+        "lo": 0, "hi": 20000,
+        "low": "compact / absent", "high": "complex / fragmented",
+        "kind": "um",
+        "meaning": (
+            "Total perimeter of necrosis polygon boundaries in µm. "
+            "A high perimeter relative to area indicates multiple small punctate foci "
+            "rather than a single confluent geographic zone."
+        ),
+    },
 ]
 
 MORPH_SCALES = [
@@ -851,21 +886,14 @@ reference_box("Immune phenotype rules used by the feature script", [
 # Necrosis Proximity
 
 ```{python}
-section_intro("proximity", "Necrosis spatial context", "Necrosis is summarised by tumour-boundary distance, tumour/stroma/immune context, and a phenotype label from the necrosis proximity stage.")
+section_intro("proximity", "Necrosis spatial context", "Necrosis is characterised by total area (µm²), perimeter complexity (µm), and fractional burden within each tumour cluster. Each cluster receives a three-tier phenotype — absent, focal, or present — aligned with standard histopathological reporting for invasive breast carcinoma.")
 ```
 
 ```{python}
-#| fig-cap: "Necrosis distribution relative to the tumour boundary."
-#| label: fig-necrosis-distance
-show_image(nec_d / "necrosis_distance_figure.png", max_width=1800,
-           missing_msg="necrosis distance figure not available: run necrosis_proximity_features.py for this slide")
-```
-
-```{python}
-#| fig-cap: "Necrosis–immune coupling and phenotype distribution."
-#| label: fig-necrosis-context
-show_image(nec_d / "necrosis_tissue_context_figure.png", max_width=1800,
-           missing_msg="necrosis tissue-context figure not available")
+#| fig-cap: "Necrosis area, perimeter, and phenotype distribution across tumour clusters."
+#| label: fig-necrosis
+show_image(nec_d / "necrosis_summary_figure.png", max_width=1800,
+           missing_msg="necrosis summary figure not available: run necrosis_proximity_features.py for this slide")
 ```
 
 ::: {.panel-tabset}
@@ -875,13 +903,10 @@ show_image(nec_d / "necrosis_tissue_context_figure.png", max_width=1800,
 ```{python}
 smart_cards(nec_summary, [
     (["wsi_dominant_necrosis_phenotype", "wsi_necrosis_phenotype"], "Dominant phenotype", "area-weighted WSI-level phenotype", "str"),
-    (["wsi_necrosis_area_total_mm2", "wsi_necrosis_area_mm2"], "Necrosis area", "total necrotic area", "mm2"),
-    (["wsi_necrosis_fraction_of_cluster", "wsi_necrosis_fraction"], "Necrosis fraction", "of analysed cluster area", "pct_frac"),
-    (["wsi_n_necrosis_components"], "Components", "separated necrosis components", "int"),
-    (["wsi_necrosis_fraction_intratumoral"], "Intratumoral necrosis", "fraction of necrosis inside tumour", "pct_frac"),
-    (["wsi_necrosis_contact_fraction"], "Contact fraction", "near tumour boundary", "pct_frac"),
-    (["wsi_necrosis_pct_within_100um"], "Within 100 µm", "boundary proximity", "pct"),
-    (["wsi_necrosis_immune_coupling_index"], "Immune coupling", "necrosis near inflammatory regions", "pct_frac"),
+    (["wsi_necrosis_area_um2", "wsi_necrosis_area_total_um2"], "Necrosis area", "total necrotic area (µm²)", "num"),
+    (["wsi_necrosis_perimeter_um", "wsi_necrosis_total_perimeter_um"], "Necrosis perimeter", "total boundary length (µm)", "um"),
+    (["wsi_necrosis_fraction_of_cluster", "wsi_necrosis_fraction", "wsi_necrosis_frac"], "Necrosis fraction", "of analysed cluster area", "pct_frac"),
+    (["wsi_n_clusters_scored"], "Clusters scored", "tumour clusters with necrosis assessment", "int"),
 ])
 ```
 
@@ -891,12 +916,9 @@ smart_cards(nec_summary, [
 cluster_chips(
     nec_cluster,
     fields=[
-        (["necrosis_fraction_of_cluster"], "Necrosis fraction", "pct_frac"),
-        (["n_necrosis_components"], "Components", "int"),
-        (["necrosis_fraction_intratumoral"], "Intratumoral", "pct_frac"),
-        (["necrosis_contact_fraction"], "Contact", "pct_frac"),
-        (["necrosis_pct_within_100um"], "Within 100 µm", "pct"),
-        (["necrosis_immune_coupling_index"], "Immune coupling", "pct_frac"),
+        (["necrosis_area_um2"], "Area (µm²)", "num"),
+        (["necrosis_perimeter_um"], "Perimeter (µm)", "um"),
+        (["necrosis_frac", "necrosis_fraction_of_cluster", "necrosis_fraction"], "Necrosis fraction", "pct_frac"),
     ],
     badge_field="necrosis_phenotype",
     badge_color_fn=phenotype_color,
@@ -908,11 +930,11 @@ cluster_chips(
 ```{python}
 show_scales(nec_summary, NECROSIS_SCALES)
 reference_box("Necrosis phenotype rules used by the feature script", [
-    "necrosis-absent: total necrosis area is below the configured absent threshold, 500 µm² by default.",
-    "tumour-central: intratumoral necrosis fraction is at least 0.50 by default.",
-    "peritumoural: at least 60% of necrosis area is within 100 µm of tumour boundary by default.",
-    "immune-adjacent: immune coupling index is at least 0.20 by default.",
-    "stromal-distant: assigned when necrosis is present but the other proximity patterns do not dominate."
+    "absent: no necrosis polygons detected in the cluster after the noise filter (default < 500 µm² fragments excluded).",
+    "focal: necrosis fraction is below the focal threshold (default 5%). Corresponds to punctate or comedo-pattern necrotic foci.",
+    "present: necrosis fraction meets or exceeds the focal threshold. Corresponds to geographic or confluent necrosis associated with high-grade invasive breast carcinoma.",
+    "Phenotype labels align with standard histopathological reporting practice for invasive breast carcinoma (WHO 5th edition, 2019).",
+    "Necrosis area and perimeter are in physical units (µm² and µm) — scanner-independent at any MPP."
 ])
 ```
 
