@@ -281,6 +281,24 @@ def generate_report(
         encoding="utf-8",
     )
 
+    # Stage the stylesheet the bundled template references
+    # (theme: [cosmo, vispace_report_style.scss]) next to the generated
+    # .qmd, so Quarto resolves it regardless of the working directory it is
+    # rendered from. Only when the bundled template is used, and never
+    # clobber a stylesheet the user has already placed there.
+    if template_qmd is None:
+        import shutil
+        from importlib.resources import as_file, files
+
+        style_name = "vispace_report_style.scss"
+        style_dst = output_path.parent / style_name
+        if not style_dst.exists():
+            style_src = files("vispace").joinpath(
+                "assets", "report", style_name
+            )
+            with as_file(style_src) as real_path:
+                shutil.copyfile(real_path, style_dst)
+
     print(f"\n{'=' * 60}")
     print("  ViSpace Report")
     print(f"  Slide         : {wsi.name}")
