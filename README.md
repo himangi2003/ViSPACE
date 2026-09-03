@@ -225,7 +225,7 @@ package, its dependencies, and the bundled model checkpoint are all resolvable.
 GPU and the model:
 
 ```bash
-vispace --wsi /path/to/slide.svs --stages tessellation,segmentation
+vispace --wsi-path /path/to/slide.svs --stages tessellation,segmentation
 ```
 
 **3. Adding a formal test suite (optional).** `pytest` is the natural fit — put
@@ -271,9 +271,8 @@ Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by t
 from vispace import PipelineConfig, run_vispace
 
 cfg = PipelineConfig(
-    OUT_DIR    = "vispace_output",
-    WSI_PATH   = "slides/your_slide.svs",
-    MUSSEL_DIR = "Mussel/",
+    OUT_DIR  = "vispace_output",
+    WSI_PATH = "slides/your_slide.svs",
     # CHECKPOINT defaults to the bundled TNBC model; set it to use your own .pt
 )
 
@@ -290,7 +289,7 @@ from pathlib import Path
 from dataclasses import replace
 from vispace import PipelineConfig, run_vispace
 
-base_cfg = PipelineConfig(OUT_DIR="vispace_output", MUSSEL_DIR="Mussel/")
+base_cfg = PipelineConfig(OUT_DIR="vispace_output")
 
 for svs in Path("slides/").glob("*.svs"):
     cfg = replace(base_cfg, WSI_PATH=str(svs))
@@ -315,7 +314,6 @@ All scripts share the same conventions: every field on `PipelineConfig` is avail
 ```bash
 python -m vispace.config \
     --wsi-path slides/TCGA-A1-A0SP.svs \
-    --mussel-dir Mussel/ \
     --print-config > run_config.json
 # CHECKPOINT defaults to the bundled TNBC model; add --checkpoint path/to.pt to override
 ```
@@ -368,7 +366,7 @@ python -m vispace.tumor_roi_overlay --from-json run_config.json --roi-size-um 15
 
 # 3e. cluster TSR / sTILs scoring
 python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json
-python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json --tils-denominator tissue
+python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json --spatial-scoring-mode refine
 
 # 3f. immune / TIL proximity features
 python -m vispace.immune_proximity_features --from-json run_config.json
@@ -484,8 +482,10 @@ cfg.OUT_DIR/
         │   └── tumor_roi_boxes_wsi_thumbnail.png   # only if the WSI file exists on disk
         │
         ├── cluster_tils_tsr_score/
-        │   ├── cluster_scoring_polygons.geojson
-        │   ├── tils_tsr_by_cluster.csv
+        │   ├── master_roi_polygons.geojson
+        │   ├── cluster_scoring_polygons.geojson   # legacy alias of the master-ROI polygons
+        │   ├── tils_tsr_by_master_roi.csv
+        │   ├── tils_tsr_by_cluster.csv            # legacy alias of tils_tsr_by_master_roi.csv
         │   ├── tils_tsr_wsi_summary.csv
         │   └── cluster_tils_tsr_overlay.png
         │
@@ -505,10 +505,15 @@ cfg.OUT_DIR/
             └── tumor_island_qc.csv            # only if MORPHOLOGY_SAVE_ISLAND_QC = True
 ```
 
-The rendered HTML report is saved separately, alongside `report/report.qmd`:
+`generate_report()` writes the Quarto report **source** into a `report/`
+subfolder of the slide directory; rendering it with Quarto produces the HTML
+alongside it:
 
 ```
-Vispace_report_slide.html
+cfg.OUT_DIR/<slide_name>/report/
+    ├── vispace_report_slide.qmd     # report source (written by generate_report)
+    ├── vispace_report_style.scss     # bundled stylesheet, copied in
+    └── vispace_report_slide.html     # produced when you render the .qmd with Quarto
 ```
 
 ---
@@ -519,23 +524,33 @@ Column names below match the actual CSV headers written by each script. Each tab
 
 ### TSR & sTILs (`tils_tsr_by_cluster.csv`)
 
+Scores are computed per Master ROI (a morphology-aware combined tumour
+ecosystem). `cluster_id` is kept as a backward-compatible alias for
+`master_roi_id`, and this file is written identically to the newer
+`tils_tsr_by_master_roi.csv`.
+
 | Column | Description |
 |--------|-------------|
-| `cluster_id` | Spatial tumour cluster identifier |
-| `TSR_display` | Human-readable `"tumour%/stroma%"` string |
+| `master_roi_id` / `cluster_id` | Master-ROI identifier (`cluster_id` is a legacy alias) |
+| `tissue_fraction` | Fraction of the ROI polygon with segmentation coverage |
+| `tumor_stroma_ratio` | Tumour area / stroma area |
+| `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` | Tumour % and stroma % within the tumour+stroma compartment |
 | `TSR_stroma_fraction` | Raw TSR value: stroma / (tumour + stroma) |
-| `TSR_category` | `stroma-high` / `stroma-low` / `unreliable` |
-| `sTILs_pct_salgado` | Inflammatory / Stroma × 100 (Salgado 2015) |
-| `sTILs_pct_stromal` | Inflammatory / (Stroma + Inflammatory) × 100 |
-| `sTILs_pct_tissue` | Inflammatory / viable tissue × 100 |
-| `sTILs_level` | `very low` / `low` / `intermediate` / `high` / `unreliable` |
-| `tissue_fraction` | Fraction of the cluster polygon with segmentation coverage |
+| `TSR_category` | `stroma-high` (compartment stroma ≥ 50 %) / `stroma-low` / `indeterminate` |
+| `TSR_reliable` | QC flag: whether the TSR denominator met the minimum-area threshold |
+| `sTIL_pct` | Stromal sTIL % (inflammatory occupancy of the stromal compartment) |
+| `intratumoral_TIL_pct` | Intratumoral TIL % |
+| `inter_tumor_sTILs_pct` | sTIL % measured in inter-tumour corridors |
+| `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the tumour foci merged into the Master ROI |
+
+Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
+`sTILs_reliable`, `iTILs_reliable`, `inter_tumor_sTILs_reliable`).
 
 ### Immune Proximity (`immune_proximity_by_cluster.csv`)
 
 | Column | Description |
 |--------|-------------|
-| `til_pct_within_20um` / `_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary |
+| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
 | `til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
 | `til_fraction_intratumoral` | Fraction of TIL area located inside the tumour |
 | `til_extratumoral_distance_aw_median_um` | Area-weighted median distance for extratumoral TILs |
@@ -563,7 +578,7 @@ Necrosis fragments below 500 µm² are treated as segmentation noise and exclude
 | `tumor_compactness_mean` | Area-weighted mean of 4π·area / perimeter² per island |
 | `tumor_elongation_mean` | Area-weighted mean major/minor axis ratio |
 | `tumor_n_islands` | Number of disconnected tumour islands (above the min-area filter) |
-| `tumor_fragmentation_index` | `1 − largest_patch_index`; higher = more fragmented |
+| `tumor_largest_patch_index` | Fraction of total tumour area in the single largest island; lower = more fragmented |
 
 ---
 
