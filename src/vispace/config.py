@@ -123,7 +123,7 @@ class PipelineConfig:
     ROI_SIZE_UM: float = 200.0
     ROI_MIN_TUMOR_FRAC: float = 0.20
     ROI_FOCUS_REPAIR_GAP_UM: float = 25.0
-    ROI_MIN_FOCUS_AREA_UM2: float = 60000.0  # good starting point for suppressing tiny foci
+    ROI_MIN_FOCUS_AREA_UM2: float = 60000.0  # (40000)good starting point for suppressing tiny foci
     ROI_MIN_ROI_TUMOR_FRAC: float = 0.30
     ROI_MAX_NECROSIS: float = 0.50
     
