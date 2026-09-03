@@ -521,8 +521,8 @@ cfg.OUT_DIR/<slide_name>/report/
 ## Feature Descriptions
 
 Column names below match the actual CSV headers written by each script and
-list the complete per-cluster schema. Each stage also writes a WSI-level
-roll-up (`*_wsi_summary.csv`) that is not tabulated here.
+list the complete schema. Each stage writes a per-cluster table and a
+WSI-level roll-up (`*_wsi_summary.csv`); both are documented per section.
 
 ### TSR & sTILs (`tils_tsr_by_cluster.csv`)
 
@@ -555,6 +555,27 @@ ecosystem). `cluster_id` is kept as a backward-compatible alias for
 | `inter_tumor_sTILs_reliable` | QC flag for `inter_tumor_sTILs_pct` |
 | `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the tumour foci merged into the Master ROI |
 
+**WSI summary (`tils_tsr_wsi_summary.csv`)** — one row per slide:
+
+| Column | Description |
+|--------|-------------|
+| `WSI_tumor_stroma_ratio` | Slide-level tumour % / stroma % (tumour+stroma compartment) |
+| `WSI_TSR_category` | Slide TSR category: `stroma-high` / `stroma-low` / `indeterminate` |
+| `WSI_tumor_pct_TS_compartment` / `WSI_stroma_pct_TS_compartment` | Slide tumour % and stroma % within the tumour+stroma compartment |
+| `WSI_sTIL_pct` | Slide-level stromal sTIL % |
+| `WSI_neighborhood_sTIL_pct` | Master-ROI-neighbourhood sTIL % (alias of `WSI_sTIL_pct`) |
+| `WSI_neighborhood_intratumoral_TIL_pct` | Slide-level intratumoral TIL % |
+| `n_clusters_input` | Number of input tumour foci |
+| `n_clusters_scored` | Number of Master ROIs scored |
+| `n_clusters_sTIL_reliable` | Number of Master ROIs with a reliable sTIL score |
+| `n_til_neighborhoods` | Number of TIL neighbourhoods (= number of Master ROIs) |
+
+Additional new-architecture fields are appended when available:
+`n_master_rois`, `n_foci`, `n_intertumor_edges`, `WSI_TSR_stroma_fraction`,
+`WSI_TSR_compartment_stroma_fraction`, `WSI_sTILs_pct_stromal_occupancy`,
+`WSI_iTILs_pct_computational`, `WSI_inter_tumor_sTILs_pct`,
+`mean_master_tissue_fraction`, `total_master_area_mm2`.
+
 ### Immune Proximity (`immune_proximity_by_cluster.csv`)
 
 | Column | Description |
@@ -572,6 +593,24 @@ ecosystem). `cluster_id` is kept as a backward-compatible alias for
 | `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` |
 | `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
 
+**WSI summary (`immune_proximity_wsi_summary.csv`)** — one row per slide:
+
+| Column | Description |
+|--------|-------------|
+| `n_clusters` | Number of scored clusters |
+| `total_cluster_area_mm2` | Total cluster area on the slide (mm²) |
+| `wsi_til_area_total_um2` / `wsi_til_area_total_mm2` | Total TIL area on the slide (µm² / mm²) |
+| `wsi_til_area_intratumoral_um2` | Total intratumoral TIL area |
+| `wsi_til_fraction_intratumoral` | Slide intratumoral TIL area / total TIL area |
+| `wsi_til_area_extratumoral_um2` | Total extratumoral TIL area |
+| `wsi_til_contact_area_um2` | Total TIL area within the contact tolerance |
+| `wsi_til_contact_fraction` | Slide contact TIL area / total TIL area |
+| `wsi_til_pct_within_50um` / `_100um` / `_200um` | Slide-level % TIL area within each threshold (one per `IMMUNE_PROXIMITY_THRESHOLDS_UM`) |
+| `wsi_til_extratumoral_distance_aw_median_um` | Slide area-weighted median extratumoral TIL distance |
+| `wsi_dominant_immune_phenotype` | Area-weighted dominant immune phenotype for the slide |
+| `contact_tolerance_um_used` | Contact tolerance applied (µm) |
+| `proximity_thresholds_um` | Proximity thresholds applied (`;`-joined, µm) |
+
 ### Necrosis Features (`necrosis_feature_by_cluster.csv`)
 
 | Column | Description |
@@ -583,7 +622,17 @@ ecosystem). `cluster_id` is kept as a backward-compatible alias for
 | `necrosis_phenotype` | `absent` / `focal` (frac < 5%) / `present` (frac ≥ 5%) |
 | `tissue_area_um2` | Total tissue area in the cluster (µm², context for the fraction) |
 
-Necrosis fragments below 500 µm² are treated as segmentation noise and excluded. A WSI-level roll-up (`necrosis_feature_wsi_summary.csv`) reports the area-weighted dominant phenotype and slide totals.
+Necrosis fragments below 500 µm² are treated as segmentation noise and excluded.
+
+**WSI summary (`necrosis_feature_wsi_summary.csv`)** — one row per slide:
+
+| Column | Description |
+|--------|-------------|
+| `wsi_n_clusters_scored` | Number of scored clusters |
+| `wsi_necrosis_area_um2` | Total necrosis area on the slide (µm²) |
+| `wsi_necrosis_perimeter_um` | Total necrosis perimeter on the slide (µm) |
+| `wsi_necrosis_fraction_of_cluster` | Slide total necrosis area / total tissue area |
+| `wsi_dominant_necrosis_phenotype` | Slide-level phenotype from the total fraction: `absent` / `focal` / `present` |
 
 ### Tumour Morphology (`tumor_core_features_by_cluster.csv`)
 
@@ -610,6 +659,21 @@ Necrosis fragments below 500 µm² are treated as segmentation noise and exclude
 | `min_island_area_um2_used` | The effective minimum-island-area filter applied (µm²) |
 | `tumor_valid_morphology` | Whether valid morphology could be computed for the cluster |
 | `tumor_invalid_reason` | Reason string when `tumor_valid_morphology` is `False` (empty otherwise) |
+
+**WSI summary (`tumor_core_wsi_summary.csv`)** — one row per slide:
+
+| Column | Description |
+|--------|-------------|
+| `n_clusters` | Number of clusters |
+| `n_clusters_with_tumor` | Number of clusters containing tumour |
+| `wsi_cluster_area_mm2` | Total cluster area on the slide (mm²) |
+| `wsi_tumor_area_mm2` | Total tumour area on the slide (mm²) |
+| `wsi_tumor_fraction_of_cluster` | Slide total tumour area / total cluster area |
+| `wsi_tumor_perimeter_um` / `wsi_tumor_perimeter_mm` | Total tumour boundary length on the slide (µm / mm) |
+| `wsi_tumor_boundary_density_per_mm` | Slide tumour perimeter [mm] / tumour area [mm²] |
+| `wsi_tumor_n_islands` | Total number of tumour islands on the slide |
+| `wsi_tumor_patch_density_per_mm2` | Tumour islands per mm² of cluster area (slide) |
+| `wsi_area_weighted_*` | Tumour-area-weighted slide means of the per-cluster metrics: `tumor_boundary_fractal_dimension`, `tumor_compactness_mean`, `tumor_solidity_mean`, `tumor_elongation_mean`, `tumor_largest_patch_index`, `tumor_island_nnd_median_um`, `tumor_island_gap_median_um`, `tumor_spread_frac` |
 
 ---
 
