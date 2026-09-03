@@ -520,7 +520,9 @@ cfg.OUT_DIR/<slide_name>/report/
 
 ## Feature Descriptions
 
-Column names below match the actual CSV headers written by each script. Each table shows the most commonly used columns — see the CSV itself for the complete set.
+Column names below match the actual CSV headers written by each script and
+list the complete per-cluster schema. Each stage also writes a WSI-level
+roll-up (`*_wsi_summary.csv`) that is not tabulated here.
 
 ### TSR & sTILs (`tils_tsr_by_cluster.csv`)
 
@@ -531,30 +533,44 @@ ecosystem). `cluster_id` is kept as a backward-compatible alias for
 
 | Column | Description |
 |--------|-------------|
-| `master_roi_id` / `cluster_id` | Master-ROI identifier (`cluster_id` is a legacy alias) |
+| `master_roi_id` | Master-ROI identifier |
+| `cluster_id` | Legacy alias for `master_roi_id` |
+| `focus_ids` | Member tumour-focus IDs merged into this Master ROI |
+| `n_foci` | Number of tumour foci merged into the Master ROI |
+| `n_intertumor_edges` | Number of inter-tumour corridor edges in the Master ROI |
+| `master_area_mm2` | Master-ROI area (mm²) |
 | `tissue_fraction` | Fraction of the ROI polygon with segmentation coverage |
 | `tumor_stroma_ratio` | Tumour area / stroma area |
-| `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` | Tumour % and stroma % within the tumour+stroma compartment |
-| `TSR_stroma_fraction` | Raw TSR value: stroma / (tumour + stroma) |
+| `tumor_pct_TS_compartment` | Tumour % within the tumour+stroma compartment |
+| `stroma_pct_TS_compartment` | Stroma % within the tumour+stroma compartment |
 | `TSR_category` | `stroma-high` (compartment stroma ≥ 50 %) / `stroma-low` / `indeterminate` |
+| `TSR_stroma_fraction` | Raw TSR value: stroma / (tumour + stroma) |
+| `TSR_compartment_stroma_fraction` | Stroma fraction within the tumour+stroma compartment |
 | `TSR_reliable` | QC flag: whether the TSR denominator met the minimum-area threshold |
 | `sTIL_pct` | Stromal sTIL % (inflammatory occupancy of the stromal compartment) |
+| `sTILs_reliable` | QC flag for `sTIL_pct` |
 | `intratumoral_TIL_pct` | Intratumoral TIL % |
+| `iTILs_reliable` | QC flag for `intratumoral_TIL_pct` |
 | `inter_tumor_sTILs_pct` | sTIL % measured in inter-tumour corridors |
+| `inter_tumor_sTILs_reliable` | QC flag for `inter_tumor_sTILs_pct` |
 | `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the tumour foci merged into the Master ROI |
-
-Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
-`sTILs_reliable`, `iTILs_reliable`, `inter_tumor_sTILs_reliable`).
 
 ### Immune Proximity (`immune_proximity_by_cluster.csv`)
 
 | Column | Description |
 |--------|-------------|
-| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
-| `til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
-| `til_fraction_intratumoral` | Fraction of TIL area located inside the tumour |
-| `til_extratumoral_distance_aw_median_um` | Area-weighted median distance for extratumoral TILs |
+| `cluster_id` | Spatial tumour cluster identifier |
+| `n_roi_boxes` | Number of tumour ROI boxes in the cluster |
+| `cluster_area_um2` / `cluster_area_mm2` | Cluster polygon area (µm² / mm²) |
+| `til_area_total_um2` | Total TIL (inflammatory) area in the cluster |
+| `til_area_intratumoral_um2` | TIL area located inside the tumour |
+| `til_fraction_intratumoral` | Intratumoral TIL area / total TIL area |
+| `til_area_extratumoral_um2` | TIL area located outside the tumour |
+| `til_extratumoral_distance_aw_median_um` | Area-weighted median distance to the tumour boundary for extratumoral TILs |
+| `til_contact_area_um2` | TIL area within the contact tolerance of the tumour boundary |
+| `til_contact_fraction` | Contact TIL area / total TIL area (contact tolerance default 5 µm) |
 | `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` |
+| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
 
 ### Necrosis Features (`necrosis_feature_by_cluster.csv`)
 
@@ -573,12 +589,27 @@ Necrosis fragments below 500 µm² are treated as segmentation noise and exclude
 
 | Column | Description |
 |--------|-------------|
-| `tumor_area_um2` | Total tumour area in µm² |
-| `tumor_solidity_mean` | Area-weighted mean of (island area / island convex-hull area) |
+| `cluster_id` | Spatial tumour cluster identifier |
+| `cluster_area_px2` / `cluster_area_um2` / `cluster_area_mm2` | Cluster polygon area (px² / µm² / mm²) |
+| `cluster_perimeter_px` / `cluster_perimeter_um` | Cluster polygon perimeter (px / µm) |
+| `tumor_area_px2` / `tumor_area_um2` / `tumor_area_mm2` | Tumour area within the cluster (px² / µm² / mm²) |
+| `tumor_perimeter_px` / `tumor_perimeter_um` / `tumor_perimeter_mm` | Tumour boundary length (px / µm / mm) |
+| `tumor_fraction_of_cluster` | Tumour area / cluster area |
+| `tumor_boundary_density_per_mm` | Tumour perimeter [mm] / tumour area [mm²] (boundary complexity, mm⁻¹) |
+| `tumor_boundary_fractal_dimension` | Vector box-counting fractal dimension of the tumour boundary |
 | `tumor_compactness_mean` | Area-weighted mean of 4π·area / perimeter² per island |
+| `tumor_solidity_mean` | Area-weighted mean of (island area / island convex-hull area) |
 | `tumor_elongation_mean` | Area-weighted mean major/minor axis ratio |
 | `tumor_n_islands` | Number of disconnected tumour islands (above the min-area filter) |
 | `tumor_largest_patch_index` | Fraction of total tumour area in the single largest island; lower = more fragmented |
+| `tumor_patch_density_per_mm2` | Number of tumour islands per mm² of cluster area |
+| `tumor_island_area_median_um2` | Median tumour-island area (µm²) |
+| `tumor_island_nnd_median_um` | Median nearest-neighbour distance between island representative points (µm) |
+| `tumor_island_gap_median_um` | Median edge-to-edge gap between islands (µm) |
+| `tumor_spread_frac` | Spatial spread of tumour islands across the cluster |
+| `min_island_area_um2_used` | The effective minimum-island-area filter applied (µm²) |
+| `tumor_valid_morphology` | Whether valid morphology could be computed for the cluster |
+| `tumor_invalid_reason` | Reason string when `tumor_valid_morphology` is `False` (empty otherwise) |
 
 ---
 
