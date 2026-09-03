@@ -2,7 +2,7 @@
 """
 immune_proximity_features.py
 ============================
-Stage 6 of the ViSpace pipeline — immune / TIL proximity feature extraction.
+Stage 6 of the ViSpace pipeline — immune / TIL spatial proximity feature extraction.
 
 Reads cluster polygons produced by run_cluster_tils_tsr_score() (stage 5)
 and the segmentation GeoJSON produced by run_stitching() (stage 3).
@@ -13,6 +13,16 @@ Output directory
         immune_proximity_by_cluster.csv
         immune_proximity_wsi_summary.csv
         immune_proximity_plot.png
+
+Primary retained features
+-------------------------
+    total inflammatory area
+    intratumoral and extratumoral inflammatory area
+    intratumoral inflammatory fraction
+    area-weighted median extratumoral distance to tumor boundary
+    tumor-contact area and fraction
+    inflammatory area within 50, 100, and 200 um of tumor boundary
+    immune phenotype
 
 Pipeline position
 -----------------
@@ -79,7 +89,7 @@ class _ImmuneCfg:
     segmentation_geojson:     Path
     outdir:                   Path  = field(default_factory=lambda: Path("immune_proximity_output"))
     mpp:                      float = 0.25
-    proximity_thresholds_um:  List[float] = field(default_factory=lambda: [20, 50, 100, 200])
+    proximity_thresholds_um:  List[float] = field(default_factory=lambda: [50, 100, 200])
     contact_tolerance_um:     float = 5.0
     # Phenotype thresholds
     desert_max_area_um2:       float = 1_000.0
@@ -275,13 +285,9 @@ def extract_cluster_features(
             "cluster_area_um2":                        cluster_area_um2,
             "cluster_area_mm2":                        cluster_area_um2 / 1e6,
             "til_area_total_um2":                      0.0,
-            "til_fraction_of_cluster":                 0.0,
-            "n_til_components":                        0,
-            "til_area_cv":                             np.nan,
             "til_area_intratumoral_um2":               0.0,
             "til_fraction_intratumoral":               np.nan,
             "til_area_extratumoral_um2":               0.0,
-            "til_fraction_extratumoral":               np.nan,
             "til_extratumoral_distance_aw_median_um":  np.nan,
             "til_contact_area_um2":                    0.0,
             "til_contact_fraction":                    np.nan,
@@ -293,9 +299,6 @@ def extract_cluster_features(
 
     total_area_um2 = float(comp_df["area_um2"].sum())
     n_comp         = int(len(comp_df))
-    area_cv        = float(comp_df["area_um2"].std(ddof=1) / comp_df["area_um2"].mean()) \
-                     if n_comp > 1 else 0.0
-
     intra_mask  = comp_df["compartment"] == "intratumoral"
     extra_mask  = comp_df["compartment"] == "extratumoral"
     intra_area  = float(comp_df.loc[intra_mask, "area_um2"].sum())
@@ -330,13 +333,9 @@ def extract_cluster_features(
         "cluster_area_um2":                        cluster_area_um2,
         "cluster_area_mm2":                        cluster_area_um2 / 1e6,
         "til_area_total_um2":                      total_area_um2,
-        "til_fraction_of_cluster":                 safe_div(total_area_um2, cluster_area_um2),
-        "n_til_components":                        n_comp,
-        "til_area_cv":                             area_cv,
         "til_area_intratumoral_um2":               intra_area,
         "til_fraction_intratumoral":               safe_div(intra_area, total_area_um2),
         "til_area_extratumoral_um2":               extra_area,
-        "til_fraction_extratumoral":               safe_div(extra_area, total_area_um2),
         "til_extratumoral_distance_aw_median_um":  aw_med,
         "til_contact_area_um2":                    contact_area,
         "til_contact_fraction":                    safe_div(contact_area, total_area_um2),
@@ -358,12 +357,9 @@ def compute_wsi_summary(cluster_df: pd.DataFrame, cfg: _ImmuneCfg) -> pd.DataFra
         "total_cluster_area_mm2":                 total_cluster_um2 / 1e6,
         "wsi_til_area_total_um2":                 total_til_um2,
         "wsi_til_area_total_mm2":                 total_til_um2 / 1e6,
-        "wsi_til_fraction_of_cluster":            safe_div(total_til_um2, total_cluster_um2),
-        "wsi_n_til_components":                   int(cluster_df["n_til_components"].sum()),
         "wsi_til_area_intratumoral_um2":          total_intra_um2,
         "wsi_til_fraction_intratumoral":          safe_div(total_intra_um2, total_til_um2),
         "wsi_til_area_extratumoral_um2":          total_extra_um2,
-        "wsi_til_fraction_extratumoral":          safe_div(total_extra_um2, total_til_um2),
         "wsi_til_contact_area_um2":               total_contact_um2,
         "wsi_til_contact_fraction":               safe_div(total_contact_um2, total_til_um2),
     }
@@ -657,13 +653,23 @@ def run_immune_proximity_features(
         immune_proximity_wsi_summary.csv
         immune_proximity_plot.png
 
+Primary retained features
+-------------------------
+    total inflammatory area
+    intratumoral and extratumoral inflammatory area
+    intratumoral inflammatory fraction
+    area-weighted median extratumoral distance to tumor boundary
+    tumor-contact area and fraction
+    inflammatory area within 50, 100, and 200 um of tumor boundary
+    immune phenotype
+
     Parameters
     ----------
     wsi_path : str
     cfg      : PipelineConfig
         Knobs (all with fallbacks):
             cfg.MPP
-            cfg.IMMUNE_PROXIMITY_THRESHOLDS_UM   (default [20,50,100,200])
+            cfg.IMMUNE_PROXIMITY_THRESHOLDS_UM   (default [50,100,200])
             cfg.IMMUNE_CONTACT_TOLERANCE_UM      (default 5.0)
             cfg.IMMUNE_DESERT_MAX_AREA_UM2       (default 1000.0)
             cfg.IMMUNE_PENETRATED_MIN_INTRA_FRAC (default 0.30)
@@ -720,7 +726,7 @@ def run_immune_proximity_features(
         segmentation_geojson=seg_geojson,
         outdir=out_dir,
         mpp=mpp,
-        proximity_thresholds_um=getattr(cfg, "IMMUNE_PROXIMITY_THRESHOLDS_UM", [20, 50, 100, 200]),
+        proximity_thresholds_um=getattr(cfg, "IMMUNE_PROXIMITY_THRESHOLDS_UM", [50, 100, 200]),
         contact_tolerance_um=getattr(cfg, "IMMUNE_CONTACT_TOLERANCE_UM", 5.0),
         desert_max_area_um2=getattr(cfg, "IMMUNE_DESERT_MAX_AREA_UM2", 1_000.0),
         penetrated_min_intra_frac=getattr(cfg, "IMMUNE_PENETRATED_MIN_INTRA_FRAC", 0.30),
@@ -734,7 +740,6 @@ def run_immune_proximity_features(
     s = wsi_df.iloc[0]
     print(f"\n  === Immune proximity summary ===")
     print(f"  Total TIL area:          {s['wsi_til_area_total_mm2']:.3f} mm²")
-    print(f"  TIL fraction of cluster: {s['wsi_til_fraction_of_cluster']:.3f}")
     print(f"  Intratumoral fraction:   {s['wsi_til_fraction_intratumoral']:.3f}")
     print(f"  Median extratumoral dist:{s['wsi_til_extratumoral_distance_aw_median_um']:.1f} µm")
     print(f"  Dominant phenotype:      {s['wsi_dominant_immune_phenotype']}")

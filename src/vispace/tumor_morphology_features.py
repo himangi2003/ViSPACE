@@ -13,6 +13,7 @@ Output directory
         tumor_core_features_by_cluster.csv
         tumor_core_wsi_summary.csv
         tumor_island_qc.csv   (only when cfg.MORPHOLOGY_SAVE_ISLAND_QC = True)
+        morphology PNGs       (only when cfg.MORPHOLOGY_SAVE_PLOTS = True)
 
 Pipeline position
 -----------------
@@ -57,14 +58,15 @@ from __future__ import annotations
 import json
 import math
 import textwrap
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from shapely.geometry import shape, Polygon as SPolygon
+import shapely
+from shapely.geometry import shape, Polygon as SPolygon, box as shapely_box
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from tqdm import tqdm
 
@@ -77,6 +79,10 @@ from .config import cfg as default_cfg, PipelineConfig
 
 DEFAULT_TUMOR_CLASS_NAMES      = {"Tumour", "Tumor", "tumour", "tumor"}
 RECOMMENDED_MIN_ISLAND_AREA_UM2 = 1000.0
+DEFAULT_FD_NUM_SCALES = 10
+DEFAULT_FD_MIN_VALID_SCALES = 5
+DEFAULT_FD_FINE_DIVISOR = 50.0
+DEFAULT_FD_COARSE_DIVISOR = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +120,132 @@ def px_to_um(px: float, mpp: float) -> float:
     return float(px) * mpp
 
 
+def px_to_mm(px: float, mpp: float) -> float:
+    return px_to_um(px, mpp) / 1000.0
+
+
 def px2_to_um2(px2: float, mpp: float) -> float:
     return float(px2) * mpp * mpp
 
 
 def px2_to_mm2(px2: float, mpp: float) -> float:
     return px2_to_um2(px2, mpp) / 1e6
+
+
+def boundary_fractal_dimension(
+    geom: BaseGeometry,
+    num_scales: int = DEFAULT_FD_NUM_SCALES,
+    min_valid_scales: int = DEFAULT_FD_MIN_VALID_SCALES,
+    fine_divisor: float = DEFAULT_FD_FINE_DIVISOR,
+    coarse_divisor: float = DEFAULT_FD_COARSE_DIVISOR,
+) -> float:
+    """
+    Estimate tumour-boundary fractal dimension using vector box counting.
+
+    This is the same finite-scale box-counting definition used previously, but
+    box construction/intersection is vectorized with Shapely 2.x instead of
+    executing thousands of Python ``boundary.intersects(cell)`` calls.  The
+    output therefore preserves the intended metric while making FD practical
+    on WSI-scale runs.
+    """
+    if geom is None or geom.is_empty:
+        return np.nan
+
+    geom = fix_geom(geom)
+    if geom is None or geom.is_empty:
+        return np.nan
+
+    boundary = geom.boundary
+    if boundary is None or boundary.is_empty:
+        return np.nan
+
+    minx, miny, maxx, maxy = boundary.bounds
+    width = float(maxx - minx)
+    height = float(maxy - miny)
+    max_dim = max(width, height)
+
+    if not np.isfinite(max_dim) or max_dim <= 0:
+        return np.nan
+    if num_scales < 3 or min_valid_scales < 3:
+        return np.nan
+    if fine_divisor <= coarse_divisor or coarse_divisor <= 0:
+        return np.nan
+
+    eps_min = max_dim / float(fine_divisor)
+    eps_max = max_dim / float(coarse_divisor)
+    if eps_min <= 0 or eps_max <= eps_min:
+        return np.nan
+
+    epsilons = np.logspace(
+        np.log10(eps_min), np.log10(eps_max), int(num_scales)
+    )
+
+    # Prepared geometries accelerate repeated predicate evaluation.
+    try:
+        shapely.prepare(boundary)
+    except Exception:
+        pass
+
+    counts = []
+    valid_eps = []
+
+    for eps in epsilons:
+        if not np.isfinite(eps) or eps <= 0:
+            continue
+
+        # Keep the previous grid anchoring/extent semantics exactly: the
+        # coordinate vectors run through max + eps.  The difference is that all
+        # boxes for one scale are now created and tested in compiled/vectorized
+        # code rather than nested Python loops.
+        x_coords = np.arange(minx, maxx + eps, eps, dtype=float)
+        y_coords = np.arange(miny, maxy + eps, eps, dtype=float)
+        if x_coords.size == 0 or y_coords.size == 0:
+            continue
+
+        xx, yy = np.meshgrid(x_coords, y_coords, indexing="xy")
+        x0 = xx.ravel()
+        y0 = yy.ravel()
+
+        try:
+            cells = shapely.box(x0, y0, x0 + eps, y0 + eps)
+            hit = shapely.intersects(boundary, cells)
+            n_boxes = int(np.count_nonzero(hit))
+        except Exception:
+            # Compatibility fallback for environments without vectorized
+            # Shapely ufuncs.  This path is slower but preserves correctness.
+            n_boxes = 0
+            for x in x_coords:
+                for y in y_coords:
+                    if boundary.intersects(
+                        shapely_box(float(x), float(y), float(x + eps), float(y + eps))
+                    ):
+                        n_boxes += 1
+
+        if n_boxes >= 3:
+            counts.append(float(n_boxes))
+            valid_eps.append(float(eps))
+
+    if len(valid_eps) < int(min_valid_scales):
+        return np.nan
+
+    valid_eps = np.asarray(valid_eps, dtype=float)
+    counts = np.asarray(counts, dtype=float)
+    x = np.log(1.0 / valid_eps)
+    y = np.log(counts)
+
+    valid = np.isfinite(x) & np.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+    if len(x) < int(min_valid_scales) or np.unique(x).size < 2:
+        return np.nan
+
+    slope, _ = np.polyfit(x, y, 1)
+    if not np.isfinite(slope):
+        return np.nan
+    if slope < 0.8 or slope > 2.2:
+        return np.nan
+    return float(slope)
+
 
 
 def get_class_name(props: dict) -> Optional[str]:
@@ -175,50 +301,44 @@ def island_hole_area_px2(poly: BaseGeometry) -> float:
 def aggregate_island_shape_metrics(
     islands: List[BaseGeometry], mpp: float
 ) -> Dict[str, float]:
+    """Area-weighted island shape metrics with vectorized GEOS operations."""
     if not islands:
         return {k: np.nan for k in [
-            "tumor_compactness_mean", "tumor_solidity_mean",
-            "tumor_elongation_mean",  "tumor_hole_fraction",
-            "tumor_major_axis_um_mean", "tumor_minor_axis_um_mean",
+            "tumor_compactness_mean",
+            "tumor_solidity_mean",
+            "tumor_elongation_mean",
         ]}
 
-    areas   = np.array([p.area for p in islands], dtype=float)
+    arr = np.asarray(islands, dtype=object)
+    areas = np.asarray(shapely.area(arr), dtype=float)
     total_A = float(areas.sum())
     weights = areas / total_A if total_A > 0 else np.ones(len(islands)) / len(islands)
 
-    comps  = np.array([island_compactness(p) for p in islands])
-    solds  = np.array([island_solidity(p)    for p in islands])
-    elongs = np.array([island_elongation(p)  for p in islands])
-    holes  = np.array([island_hole_area_px2(p) for p in islands])
+    perims = np.asarray(shapely.length(arr), dtype=float)
+    comps = np.full(len(islands), np.nan, dtype=float)
+    valid_p = perims > 0
+    comps[valid_p] = 4.0 * math.pi * areas[valid_p] / (perims[valid_p] ** 2)
 
-    majors, minors = [], []
-    for p in islands:
-        rect = p.minimum_rotated_rectangle
-        if rect.is_empty or rect.geom_type != "Polygon":
-            majors.append(np.nan); minors.append(np.nan); continue
-        coords = list(rect.exterior.coords)
-        edges  = sorted([math.hypot(coords[i+1][0]-coords[i][0],
-                                    coords[i+1][1]-coords[i][1]) for i in range(4)])
-        minors.append(float(np.mean(edges[:2])))
-        majors.append(float(np.mean(edges[2:])))
-    majors = np.array(majors)
-    minors = np.array(minors)
+    hulls = shapely.convex_hull(arr)
+    hull_areas = np.asarray(shapely.area(hulls), dtype=float)
+    solds = np.full(len(islands), np.nan, dtype=float)
+    valid_h = hull_areas > 0
+    solds[valid_h] = areas[valid_h] / hull_areas[valid_h]
+
+    # Minimum rotated rectangle is already a GEOS operation; keep the existing
+    # exact definition, but only this metric needs a small Python loop.
+    elongs = np.asarray([island_elongation(p) for p in islands], dtype=float)
 
     def wavg(vals: np.ndarray) -> float:
         mask = np.isfinite(vals)
         return float(np.average(vals[mask], weights=weights[mask])) if mask.any() else np.nan
 
-    total_hole  = float(holes.sum())
-    total_gross = total_A + total_hole
-
     return {
-        "tumor_compactness_mean":   wavg(comps),
-        "tumor_solidity_mean":      wavg(solds),
-        "tumor_elongation_mean":    wavg(elongs),
-        "tumor_hole_fraction":      safe_div(total_hole, total_gross),
-        "tumor_major_axis_um_mean": wavg(majors) * mpp if np.any(np.isfinite(majors)) else np.nan,
-        "tumor_minor_axis_um_mean": wavg(minors) * mpp if np.any(np.isfinite(minors)) else np.nan,
+        "tumor_compactness_mean": wavg(comps),
+        "tumor_solidity_mean":    wavg(solds),
+        "tumor_elongation_mean":  wavg(elongs),
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -234,50 +354,70 @@ def compute_fragmentation(
     cluster_area_mm2 = px2_to_mm2(cluster_geom.area, mpp)
 
     _nan_keys = [
-        "tumor_n_islands", "tumor_largest_patch_index", "tumor_fragmentation_index",
-        "tumor_effective_patches", "tumor_patch_density_per_mm2", "tumor_island_area_cv",
-        "tumor_island_area_mean_um2", "tumor_island_area_median_um2",
-        "tumor_island_area_p90_um2", "tumor_island_area_max_um2",
-        "tumor_island_nnd_mean_um", "tumor_island_nnd_median_um", "tumor_island_nnd_std_um",
-        "tumor_spread_frac", "tumor_convex_hull_fill",
+        "tumor_n_islands",
+        "tumor_largest_patch_index",
+        "tumor_patch_density_per_mm2",
+        "tumor_island_area_median_um2",
+        "tumor_island_nnd_median_um",
+        "tumor_island_gap_median_um",
+        "tumor_spread_frac",
     ]
     out = {k: (0 if k == "tumor_n_islands" else np.nan) for k in _nan_keys}
     if n == 0:
         return out
 
-    areas_px2 = np.array([g.area for g in islands], dtype=float)
+    arr = np.asarray(islands, dtype=object)
+    areas_px2 = np.asarray(shapely.area(arr), dtype=float)
     areas_um2 = areas_px2 * mpp * mpp
     total_px2 = float(areas_px2.sum())
-    pts = np.array([[g.representative_point().x, g.representative_point().y]
-                    for g in islands], dtype=float)
 
-    lpi     = safe_div(float(areas_px2.max()), total_px2)
-    p       = areas_px2 / total_px2 if total_px2 > 0 else np.ones(n) / n
-    eff     = float(1.0 / np.sum(p**2)) if np.sum(p**2) > 0 else np.nan
-    area_cv = float(np.std(areas_px2, ddof=1) / np.mean(areas_px2)) if n > 1 else 0.0
+    # Vectorized representative points avoid one Python/GEOS call per island.
+    reps = shapely.point_on_surface(arr)
+    pts = np.column_stack((
+        np.asarray(shapely.get_x(reps), dtype=float),
+        np.asarray(shapely.get_y(reps), dtype=float),
+    ))
 
-    out["tumor_n_islands"]              = int(n)
-    out["tumor_largest_patch_index"]    = lpi
-    out["tumor_fragmentation_index"]    = (1.0 - lpi) if pd.notna(lpi) else np.nan
-    out["tumor_effective_patches"]      = eff
-    out["tumor_patch_density_per_mm2"]  = safe_div(n, cluster_area_mm2)
-    out["tumor_island_area_cv"]         = area_cv
-    out["tumor_island_area_mean_um2"]   = float(np.mean(areas_um2))
+    out["tumor_n_islands"] = int(n)
+    out["tumor_largest_patch_index"] = safe_div(float(areas_px2.max()), total_px2)
+    out["tumor_patch_density_per_mm2"] = safe_div(n, cluster_area_mm2)
     out["tumor_island_area_median_um2"] = float(np.median(areas_um2))
-    out["tumor_island_area_p90_um2"]    = float(np.percentile(areas_um2, 90))
-    out["tumor_island_area_max_um2"]    = float(np.max(areas_um2))
 
     if n > 1:
         try:
             from scipy.spatial import cKDTree
             kd = cKDTree(pts)
             dist, _ = kd.query(pts, k=2)
-            nnd_um  = dist[:, 1] * mpp
-            out["tumor_island_nnd_mean_um"]   = float(np.mean(nnd_um))
-            out["tumor_island_nnd_median_um"] = float(np.median(nnd_um))
-            out["tumor_island_nnd_std_um"]    = float(np.std(nnd_um))
+            out["tumor_island_nnd_median_um"] = float(np.median(dist[:, 1] * mpp))
         except Exception:
             pass
+
+        # Exact edge-to-edge nearest gap using GEOS STRtree nearest-neighbour
+        # search.  This replaces the previous O(n^2) Python pairwise loop.
+        try:
+            gap_tree = STRtree(islands)
+            _, gap_dist = gap_tree.query_nearest(
+                arr, exclusive=True, all_matches=False, return_distance=True
+            )
+            gap_dist = np.asarray(gap_dist, dtype=float)
+            gap_dist = gap_dist[np.isfinite(gap_dist)]
+            if gap_dist.size:
+                out["tumor_island_gap_median_um"] = float(np.median(gap_dist) * mpp)
+        except Exception:
+            # Conservative fallback for older Shapely versions.
+            nearest_gaps_px = []
+            for i, island_i in enumerate(islands):
+                gaps = [
+                    float(island_i.distance(island_j))
+                    for j, island_j in enumerate(islands) if j != i
+                ]
+                if gaps:
+                    nearest_gaps_px.append(min(gaps))
+            if nearest_gaps_px:
+                out["tumor_island_gap_median_um"] = float(
+                    np.median(np.asarray(nearest_gaps_px, dtype=float)) * mpp
+                )
+
         x_ext = float(np.max(pts[:, 0]) - np.min(pts[:, 0]))
         y_ext = float(np.max(pts[:, 1]) - np.min(pts[:, 1]))
     else:
@@ -287,35 +427,8 @@ def compute_fragmentation(
     cw = max(maxx - minx, 1e-12)
     ch = max(maxy - miny, 1e-12)
     out["tumor_spread_frac"] = 0.5 * (x_ext / cw + y_ext / ch)
-
-    if n >= 3:
-        try:
-            from scipy.spatial import ConvexHull
-            hull_area = float(ConvexHull(pts).volume)
-            out["tumor_convex_hull_fill"] = safe_div(total_px2, hull_area)
-        except Exception:
-            pass
-
     return out
 
-
-def size_stratified_counts(
-    islands: List[BaseGeometry], mpp: float
-) -> Dict[str, int]:
-    if not islands:
-        return {
-            "tumor_n_islands_fragment": 0,
-            "tumor_n_islands_micro":    0,
-            "tumor_n_islands_small":    0,
-            "tumor_n_islands_large":    0,
-        }
-    areas_um2 = np.array([g.area * mpp * mpp for g in islands])
-    return {
-        "tumor_n_islands_fragment": int((areas_um2 <  1_000).sum()),
-        "tumor_n_islands_micro":    int(((areas_um2 >=  1_000) & (areas_um2 <  10_000)).sum()),
-        "tumor_n_islands_small":    int(((areas_um2 >= 10_000) & (areas_um2 < 100_000)).sum()),
-        "tumor_n_islands_large":    int((areas_um2 >= 100_000).sum()),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +441,11 @@ def compute_cluster_features(
     tumor_intersections: List[BaseGeometry],
     mpp:                 float,
     min_island_area_px2: float,
+    fd_num_scales: int = DEFAULT_FD_NUM_SCALES,
+    fd_min_valid_scales: int = DEFAULT_FD_MIN_VALID_SCALES,
+    fd_fine_divisor: float = DEFAULT_FD_FINE_DIVISOR,
+    fd_coarse_divisor: float = DEFAULT_FD_COARSE_DIVISOR,
+    collect_island_rows: bool = False,
 ) -> Tuple[Dict, List[Dict]]:
     cl_area_px2 = float(cluster_geom.area)
     cl_perim_px = float(cluster_geom.length)
@@ -340,49 +458,57 @@ def compute_cluster_features(
         "cluster_perimeter_um": px_to_um(cl_perim_px, mpp),
     }
     _empty_shape = {
-        "tumor_compactness_mean": np.nan, "tumor_solidity_mean": np.nan,
-        "tumor_elongation_mean":  np.nan, "tumor_hole_fraction": np.nan,
-        "tumor_major_axis_um_mean": np.nan, "tumor_minor_axis_um_mean": np.nan,
+        "tumor_compactness_mean": np.nan,
+        "tumor_solidity_mean": np.nan,
+        "tumor_elongation_mean": np.nan,
     }
 
     if not tumor_intersections:
         row = {**base,
                "tumor_area_px2": 0.0, "tumor_area_um2": 0.0, "tumor_area_mm2": 0.0,
-               "tumor_perimeter_px": 0.0, "tumor_perimeter_um": 0.0,
+               "tumor_perimeter_px": 0.0, "tumor_perimeter_um": 0.0, "tumor_perimeter_mm": 0.0,
                "tumor_fraction_of_cluster": 0.0,
-               "tumor_boundary_per_area_um_per_mm2": np.nan,
+               "tumor_boundary_density_per_mm": np.nan,
+               "tumor_boundary_fractal_dimension": np.nan,
                **_empty_shape,
                "tumor_valid_morphology": False,
                "tumor_invalid_reason": "no_tumor_intersection"}
         row.update(compute_fragmentation([], cluster_geom, mpp))
-        row.update(size_stratified_counts([], mpp))
         return row, []
 
-    dissolved = fix_geom(unary_union(tumor_intersections))
+    dissolved = fix_geom(shapely.union_all(np.asarray(tumor_intersections, dtype=object)))
     if dissolved is None or dissolved.is_empty:
         row = {**base,
                "tumor_area_px2": 0.0, "tumor_area_um2": 0.0, "tumor_area_mm2": 0.0,
-               "tumor_perimeter_px": 0.0, "tumor_perimeter_um": 0.0,
+               "tumor_perimeter_px": 0.0, "tumor_perimeter_um": 0.0, "tumor_perimeter_mm": 0.0,
                "tumor_fraction_of_cluster": 0.0,
-               "tumor_boundary_per_area_um_per_mm2": np.nan,
+               "tumor_boundary_density_per_mm": np.nan,
+               "tumor_boundary_fractal_dimension": np.nan,
                **_empty_shape,
                "tumor_valid_morphology": False,
                "tumor_invalid_reason": "dissolved_empty"}
         row.update(compute_fragmentation([], cluster_geom, mpp))
-        row.update(size_stratified_counts([], mpp))
         return row, []
 
     tumor_area_px2 = float(dissolved.area)
     tumor_perim_px = float(dissolved.length)
     tumor_area_mm2 = px2_to_mm2(tumor_area_px2, mpp)
     tumor_perim_um = px_to_um(tumor_perim_px, mpp)
+    tumor_perim_mm = px_to_mm(tumor_perim_px, mpp)
+
+    tumor_boundary_fd = boundary_fractal_dimension(
+        dissolved,
+        num_scales=fd_num_scales,
+        min_valid_scales=fd_min_valid_scales,
+        fine_divisor=fd_fine_divisor,
+        coarse_divisor=fd_coarse_divisor,
+    )
 
     all_islands = list(iter_polygon_parts(dissolved))
     islands     = [p for p in all_islands if p.area >= min_island_area_px2]
 
     shape_metrics = aggregate_island_shape_metrics(islands, mpp)
     frag          = compute_fragmentation(islands, cluster_geom, mpp)
-    strata        = size_stratified_counts(all_islands, mpp)
 
     row = {
         **base,
@@ -391,34 +517,44 @@ def compute_cluster_features(
         "tumor_area_mm2":                     tumor_area_mm2,
         "tumor_perimeter_px":                 tumor_perim_px,
         "tumor_perimeter_um":                 tumor_perim_um,
+        "tumor_perimeter_mm":                 tumor_perim_mm,
         "tumor_fraction_of_cluster":          safe_div(tumor_area_px2, cl_area_px2),
-        "tumor_boundary_per_area_um_per_mm2": safe_div(tumor_perim_um, tumor_area_mm2),
+
+        # Size-normalized boundary complexity:
+        # perimeter [mm] / area [mm²] = mm^-1.
+        "tumor_boundary_density_per_mm":      safe_div(
+            tumor_perim_mm, tumor_area_mm2
+        ),
+
+        "tumor_boundary_fractal_dimension":   tumor_boundary_fd,
         **shape_metrics,
         **frag,
-        **strata,
         "min_island_area_um2_used":           min_island_area_px2 * mpp * mpp,
         "tumor_valid_morphology":             True,
         "tumor_invalid_reason":               "",
     }
 
     island_rows = []
-    for iid, island in enumerate(islands, start=1):
-        rp = island.representative_point()
-        island_rows.append({
-            "cluster_id":                     cluster_id,
-            "tumor_island_id":                iid,
-            "tumor_island_area_px2":          float(island.area),
-            "tumor_island_area_um2":          px2_to_um2(island.area, mpp),
-            "tumor_island_area_mm2":          px2_to_mm2(island.area, mpp),
-            "tumor_island_perimeter_px":      float(island.length),
-            "tumor_island_perimeter_um":      px_to_um(island.length, mpp),
-            "tumor_island_representative_x":  float(rp.x),
-            "tumor_island_representative_y":  float(rp.y),
-            "tumor_island_compactness":       island_compactness(island),
-            "tumor_island_solidity":          island_solidity(island),
-            "tumor_island_elongation":        island_elongation(island),
-            "tumor_island_fraction_of_tumor": safe_div(island.area, tumor_area_px2),
-        })
+    if collect_island_rows:
+        # Island-level QC is intentionally lazy: these per-island values are
+        # expensive and are not needed by the WSI summary or QMD.
+        for iid, island in enumerate(islands, start=1):
+            rp = island.representative_point()
+            island_rows.append({
+                "cluster_id":                     cluster_id,
+                "tumor_island_id":                iid,
+                "tumor_island_area_px2":          float(island.area),
+                "tumor_island_area_um2":          px2_to_um2(island.area, mpp),
+                "tumor_island_area_mm2":          px2_to_mm2(island.area, mpp),
+                "tumor_island_perimeter_px":      float(island.length),
+                "tumor_island_perimeter_um":      px_to_um(island.length, mpp),
+                "tumor_island_perimeter_mm":      px_to_mm(island.length, mpp),
+                "tumor_island_representative_x":  float(rp.x),
+                "tumor_island_representative_y":  float(rp.y),
+                "tumor_island_compactness":       island_compactness(island),
+                "tumor_island_solidity":          island_solidity(island),
+                "tumor_island_elongation":        island_elongation(island),
+            })
 
     return row, island_rows
 
@@ -449,27 +585,39 @@ def load_cluster_polygons(path: Path) -> pd.DataFrame:
 
 
 def load_tumor_regions(path: Path, tumor_names: set) -> pd.DataFrame:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    """Load only tumour-class polygons; use orjson when available."""
+    try:
+        import orjson
+        data = orjson.loads(Path(path).read_bytes())
+    except Exception:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
     rows, n_total = [], 0
     for idx, feat in enumerate(data.get("features", [])):
         n_total += 1
         props = feat.get("properties", {}) or {}
-        cls   = get_class_name(props)
+        cls = get_class_name(props)
         if cls not in tumor_names:
             continue
-        geom = fix_geom(shape(feat["geometry"]))
+        geom_data = feat.get("geometry")
+        if not geom_data:
+            continue
+        geom = fix_geom(shape(geom_data))
         if geom is None or geom.is_empty:
             continue
         rows.append({"source_id": idx, "geometry": geom})
+
     if not rows:
         raise RuntimeError(
             f"No tumour polygons found in {path}. "
             f"Tried class names: {sorted(tumor_names)}"
         )
+
     df = pd.DataFrame(rows)
     print(f"  Loaded {len(df):,} tumour polygons from {n_total:,} GeoJSON features.")
     return df
+
 
 
 # ---------------------------------------------------------------------------
@@ -491,39 +639,98 @@ def extract_all_clusters(
     tumor_regions:       pd.DataFrame,
     mpp:                 float,
     min_island_area_um2: float = 0.0,
+    fd_num_scales: int = DEFAULT_FD_NUM_SCALES,
+    fd_min_valid_scales: int = DEFAULT_FD_MIN_VALID_SCALES,
+    fd_fine_divisor: float = DEFAULT_FD_FINE_DIVISOR,
+    fd_coarse_divisor: float = DEFAULT_FD_COARSE_DIVISOR,
+    collect_island_rows: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    tumor_geoms    = tumor_regions["geometry"].tolist()
-    tree           = STRtree(tumor_geoms)
-    min_island_px2 = min_island_area_um2 / (mpp * mpp) if min_island_area_um2 > 0 else 0.0
+    """
+    Extract morphology for all Master-ROI/cluster polygons.
 
+    Performance changes versus the previous implementation:
+      * one STRtree bulk query for every cluster instead of one query per loop;
+      * GEOS ``predicate='intersects'`` filtering inside the tree;
+      * vectorized Shapely intersection for each cluster's candidate polygons;
+      * optional island-row materialization only when QC output is requested.
+    """
+    tumor_geoms = tumor_regions["geometry"].tolist()
+    cluster_geoms = cluster_polygons["cluster_geom"].tolist()
+    tree = STRtree(tumor_geoms)
+    min_island_px2 = (
+        min_island_area_um2 / (mpp * mpp) if min_island_area_um2 > 0 else 0.0
+    )
+
+    # Query all cluster geometries in one GEOS call.  Shapely 2 returns a
+    # 2xN array: [query_cluster_index, tree_tumor_index].
+    candidates_by_cluster = [[] for _ in cluster_geoms]
+    try:
+        pairs = tree.query(np.asarray(cluster_geoms, dtype=object), predicate="intersects")
+        if np.asarray(pairs).size:
+            for ci, ti in zip(np.asarray(pairs)[0], np.asarray(pairs)[1]):
+                candidates_by_cluster[int(ci)].append(int(ti))
+    except Exception:
+        # Compatibility fallback, still with a pre-built tree.
+        for ci, cgeom in enumerate(cluster_geoms):
+            hits = tree.query(cgeom)
+            if len(hits) and isinstance(hits[0], (int, np.integer)):
+                candidates_by_cluster[ci] = [int(i) for i in hits]
+            else:
+                id_map = {id(g): i for i, g in enumerate(tumor_geoms)}
+                candidates_by_cluster[ci] = [id_map[id(g)] for g in hits]
+
+    tumor_arr = np.asarray(tumor_geoms, dtype=object)
     feature_rows, island_rows = [], []
 
-    for _, c in tqdm(
-        cluster_polygons.iterrows(), total=len(cluster_polygons),
-        desc="Computing tumour morphology", unit="cluster",
-    ):
-        cid      = c["cluster_id"]
-        cgeom    = c["cluster_geom"]
-        cand_idx = query_tree(tree, tumor_geoms, cgeom)
-        intersected = []
-        for i in cand_idx:
-            g = tumor_geoms[i]
-            if not cgeom.intersects(g):
-                continue
-            inter = cgeom.intersection(g)
-            for part in iter_polygon_parts(inter):
-                if part.area > 0:
-                    intersected.append(part)
+    for ci, (_, c) in enumerate(tqdm(
+        cluster_polygons.iterrows(),
+        total=len(cluster_polygons),
+        desc="Computing tumour morphology",
+        unit="cluster",
+    )):
+        cid = c["cluster_id"]
+        cgeom = c["cluster_geom"]
+        cand_idx = candidates_by_cluster[ci]
 
-        row, irows = compute_cluster_features(cid, cgeom, intersected, mpp, min_island_px2)
+        intersected = []
+        if cand_idx:
+            cand = tumor_arr[np.asarray(cand_idx, dtype=int)]
+            try:
+                inter = shapely.intersection(cand, cgeom)
+                areas = np.asarray(shapely.area(inter), dtype=float)
+                keep = np.isfinite(areas) & (areas > 0) & (~np.asarray(shapely.is_empty(inter)))
+                intersected = list(np.asarray(inter, dtype=object)[keep])
+            except Exception:
+                # Fallback for unusual geometry failures; keep semantics.
+                for g in cand:
+                    if not cgeom.intersects(g):
+                        continue
+                    q = cgeom.intersection(g)
+                    if q is not None and not q.is_empty and q.area > 0:
+                        intersected.append(q)
+
+        row, irows = compute_cluster_features(
+            cid,
+            cgeom,
+            intersected,
+            mpp,
+            min_island_px2,
+            fd_num_scales=fd_num_scales,
+            fd_min_valid_scales=fd_min_valid_scales,
+            fd_fine_divisor=fd_fine_divisor,
+            fd_coarse_divisor=fd_coarse_divisor,
+            collect_island_rows=collect_island_rows,
+        )
         for meta in ["n_roi_boxes", "buffer_um", "priority_nonoverlap_assignment"]:
             if meta in c.index:
                 row[meta] = c[meta]
 
         feature_rows.append(row)
-        island_rows.extend(irows)
+        if collect_island_rows and irows:
+            island_rows.extend(irows)
 
     return pd.DataFrame(feature_rows), pd.DataFrame(island_rows)
+
 
 
 # ---------------------------------------------------------------------------
@@ -531,23 +738,38 @@ def extract_all_clusters(
 # ---------------------------------------------------------------------------
 
 CORE_FEATURE_COLUMNS = [
-    "cluster_id", "n_roi_boxes", "cluster_area_mm2", "cluster_perimeter_um",
-    "tumor_area_px2", "tumor_area_um2", "tumor_area_mm2",
-    "tumor_perimeter_px", "tumor_perimeter_um",
+    "cluster_id",
+    "n_roi_boxes",
+    "cluster_area_mm2",
+
+    # Tumor burden
+    "tumor_area_mm2",
+    "tumor_perimeter_um",
+    "tumor_perimeter_mm",
     "tumor_fraction_of_cluster",
-    "tumor_boundary_per_area_um_per_mm2",
-    "tumor_compactness_mean", "tumor_solidity_mean", "tumor_elongation_mean",
-    "tumor_major_axis_um_mean", "tumor_minor_axis_um_mean",
-    "tumor_hole_fraction",
-    "tumor_n_islands", "tumor_n_islands_fragment", "tumor_n_islands_micro",
-    "tumor_n_islands_small", "tumor_n_islands_large",
-    "tumor_largest_patch_index", "tumor_fragmentation_index",
-    "tumor_effective_patches", "tumor_patch_density_per_mm2",
-    "tumor_island_area_cv", "tumor_island_area_mean_um2",
-    "tumor_island_area_median_um2", "tumor_island_area_p90_um2", "tumor_island_area_max_um2",
-    "tumor_island_nnd_mean_um", "tumor_island_nnd_median_um",
-    "tumor_spread_frac", "tumor_convex_hull_fill",
-    "min_island_area_um2_used", "tumor_valid_morphology", "tumor_invalid_reason",
+
+    # Boundary morphology
+    "tumor_boundary_density_per_mm",
+    "tumor_boundary_fractal_dimension",
+
+    # Shape
+    "tumor_compactness_mean",
+    "tumor_solidity_mean",
+    "tumor_elongation_mean",
+
+    # Tumor organization
+    "tumor_n_islands",
+    "tumor_largest_patch_index",
+    "tumor_patch_density_per_mm2",
+    "tumor_island_area_median_um2",
+    "tumor_island_nnd_median_um",
+    "tumor_island_gap_median_um",
+    "tumor_spread_frac",
+
+    # QC / reproducibility
+    "min_island_area_um2_used",
+    "tumor_valid_morphology",
+    "tumor_invalid_reason",
 ]
 
 
@@ -560,6 +782,7 @@ def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.Dat
     total_cl_px2      = float(features["cluster_area_px2"].sum())
     total_tu_px2      = float(features["tumor_area_px2"].sum())
     total_tu_perim_um = float(features["tumor_perimeter_um"].sum())
+    total_tu_perim_mm = total_tu_perim_um / 1000.0
     total_tu_mm2      = float(features["tumor_area_mm2"].sum())
     total_cl_mm2      = float(features["cluster_area_mm2"].sum())
 
@@ -570,24 +793,26 @@ def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.Dat
         "wsi_tumor_area_mm2":                    total_tu_mm2,
         "wsi_tumor_fraction_of_cluster":         safe_div(total_tu_px2, total_cl_px2),
         "wsi_tumor_perimeter_um":                total_tu_perim_um,
-        "wsi_tumor_boundary_per_area_um_per_mm2": safe_div(total_tu_perim_um, total_tu_mm2),
-        "wsi_tumor_n_islands":                   int(features["tumor_n_islands"].fillna(0).sum()),
-        "wsi_tumor_patch_density_per_mm2":       safe_div(
+        "wsi_tumor_perimeter_mm":                total_tu_perim_mm,
+        "wsi_tumor_boundary_density_per_mm":      safe_div(
+            total_tu_perim_mm, total_tu_mm2
+        ),
+        "wsi_tumor_n_islands": int(features["tumor_n_islands"].fillna(0).sum()),
+        "wsi_tumor_patch_density_per_mm2": safe_div(
             float(features["tumor_n_islands"].fillna(0).sum()), total_cl_mm2),
     }
-
-    for tier in ["fragment", "micro", "small", "large"]:
-        col = f"tumor_n_islands_{tier}"
-        if col in features.columns:
-            out[f"wsi_{col}"] = int(features[col].fillna(0).sum())
 
     weights = features["tumor_area_mm2"].to_numpy(float)
     valid_w = weights > 0
     for col in [
-        "tumor_compactness_mean", "tumor_solidity_mean", "tumor_elongation_mean",
-        "tumor_hole_fraction", "tumor_largest_patch_index", "tumor_fragmentation_index",
-        "tumor_effective_patches", "tumor_island_nnd_median_um", "tumor_spread_frac",
-        "tumor_convex_hull_fill",
+        "tumor_boundary_fractal_dimension",
+        "tumor_compactness_mean",
+        "tumor_solidity_mean",
+        "tumor_elongation_mean",
+        "tumor_largest_patch_index",
+        "tumor_island_nnd_median_um",
+        "tumor_island_gap_median_um",
+        "tumor_spread_frac",
     ]:
         if col in features.columns and valid_w.any():
             vals = features[col].to_numpy(float)
@@ -595,15 +820,6 @@ def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.Dat
             out[f"wsi_area_weighted_{col}"] = (
                 float(np.average(vals[mask], weights=weights[mask])) if mask.any() else np.nan
             )
-
-    if islands is not None and not islands.empty:
-        a = islands["tumor_island_area_um2"].to_numpy(float)
-        out.update({
-            "wsi_island_area_mean_um2":   float(np.mean(a)),
-            "wsi_island_area_median_um2": float(np.median(a)),
-            "wsi_island_area_p90_um2":    float(np.percentile(a, 90)),
-            "wsi_island_area_max_um2":    float(np.max(a)),
-        })
 
     return pd.DataFrame([out])
 
@@ -645,8 +861,8 @@ def classify_overall_tumor_morphology(wsi_row: pd.Series, cluster_df: pd.DataFra
     user-facing interpretation. This is descriptive only, not diagnostic.
     """
     tumor_fraction = row_get(wsi_row, "wsi_tumor_fraction_of_cluster")
-    fragmentation = row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")
-    n_islands      = row_get(wsi_row, "wsi_tumor_n_islands")
+    lpi = row_get(wsi_row, "wsi_area_weighted_tumor_largest_patch_index")
+    n_islands = row_get(wsi_row, "wsi_tumor_n_islands")
     solidity       = row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")
     spread         = row_get(wsi_row, "wsi_area_weighted_tumor_spread_frac")
 
@@ -658,10 +874,10 @@ def classify_overall_tumor_morphology(wsi_row: pd.Series, cluster_df: pd.DataFra
 
     descriptors = []
 
-    if pd.notna(fragmentation) and fragmentation >= 0.65:
-        descriptors.append("fragmented")
-    elif pd.notna(fragmentation) and fragmentation <= 0.40:
+    if pd.notna(lpi) and lpi >= 0.60:
         descriptors.append("cohesive")
+    elif pd.notna(lpi) and lpi < 0.35:
+        descriptors.append("fragmented")
     else:
         descriptors.append("moderately fragmented")
 
@@ -694,13 +910,13 @@ def classify_overall_tumor_morphology(wsi_row: pd.Series, cluster_df: pd.DataFra
                 f"Cluster {int(dom['cluster_id'])} is the dominant tumour-bearing region, "
                 f"contributing {fmt_percent(area_share)} of tumour area, with "
                 f"{fmt_metric(row_get(dom, 'tumor_n_islands'), 0)} tumour islands and "
-                f"fragmentation index {fmt_metric(row_get(dom, 'tumor_fragmentation_index'))}."
+                f"largest patch index {fmt_metric(row_get(dom, 'tumor_largest_patch_index'))}."
             )
 
     explanation = (
         f"The slide contains {fmt_metric(n_islands, 0)} tumour islands across "
         f"{fmt_metric(row_get(wsi_row, 'n_clusters_with_tumor'), 0)} tumour-positive clusters. "
-        f"The WSI fragmentation index is {fmt_metric(fragmentation)}, with solidity "
+        f"The WSI largest patch index is {fmt_metric(lpi)}, with solidity "
         f"{fmt_metric(solidity)} and spread fraction {fmt_metric(spread)}. "
         f"{dominant_sentence}"
     )
@@ -709,7 +925,7 @@ def classify_overall_tumor_morphology(wsi_row: pd.Series, cluster_df: pd.DataFra
 
 
 def make_tumor_morphology_interpretation_bullets(wsi_row: pd.Series, cluster_df: pd.DataFrame) -> str:
-    frag = row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")
+    lpi = row_get(wsi_row, "wsi_area_weighted_tumor_largest_patch_index")
     tumor_fraction = row_get(wsi_row, "wsi_tumor_fraction_of_cluster")
     n_islands = row_get(wsi_row, "wsi_tumor_n_islands")
     solidity = row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")
@@ -717,12 +933,12 @@ def make_tumor_morphology_interpretation_bullets(wsi_row: pd.Series, cluster_df:
 
     bullets = []
 
-    if pd.notna(frag) and frag >= 0.65:
-        bullets.append("• High fragmentation: tumour is distributed across many separated islands.")
-    elif pd.notna(frag) and frag <= 0.40:
-        bullets.append("• Low fragmentation: tumour architecture appears comparatively cohesive.")
+    if pd.notna(lpi) and lpi >= 0.60:
+        bullets.append("• High largest-patch index: tumour architecture is comparatively cohesive.")
+    elif pd.notna(lpi) and lpi < 0.35:
+        bullets.append("• Low largest-patch index: tumour is distributed across multiple separated islands.")
     else:
-        bullets.append("• Intermediate fragmentation: tumour shows partial separation into islands.")
+        bullets.append("• Intermediate largest-patch index: tumour shows partial separation into islands.")
 
     if pd.notna(tumor_fraction) and tumor_fraction >= 0.30:
         bullets.append("• Tumour-rich analysed region: tumour occupies a substantial fraction of cluster area.")
@@ -805,7 +1021,7 @@ def generate_tumor_morphology_analysis_png(
 
     required = [
         "cluster_id", "tumor_area_mm2", "tumor_fraction_of_cluster",
-        "tumor_n_islands", "tumor_fragmentation_index",
+        "tumor_n_islands", "tumor_largest_patch_index",
     ]
     missing = [c for c in required if c not in core_features.columns]
     if missing:
@@ -857,13 +1073,13 @@ def generate_tumor_morphology_analysis_png(
 
     metrics = [
         ("Tumour area", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_area_mm2'))} mm²", "Total segmented tumour area"),
+        ("Tumour perimeter", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_perimeter_mm'))} mm", "Total segmented tumour boundary"),
         ("Tumour fraction", fmt_percent(row_get(wsi_row, "wsi_tumor_fraction_of_cluster") * 100), "Fraction of analysed cluster area"),
+        ("Boundary fractal dimension", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_boundary_fractal_dimension"), 3), "Box-counting boundary estimate"),
         ("Tumour islands", fmt_metric(row_get(wsi_row, "wsi_tumor_n_islands"), 0), "Separated tumour components"),
-        ("Fragmentation index", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_fragmentation_index")), "Higher means more fragmented"),
+        ("Largest patch index", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_largest_patch_index")), "Higher means more cohesive"),
         ("Solidity", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_solidity_mean")), "Higher means more filled/solid"),
-        ("Spread fraction", fmt_metric(row_get(wsi_row, "wsi_area_weighted_tumor_spread_frac")), "Spatial distribution of islands"),
-        ("Patch density", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_patch_density_per_mm2'))}/mm²", "Tumour patches per area"),
-        ("Median island distance", f"{fmt_metric(row_get(wsi_row, 'wsi_area_weighted_tumor_island_nnd_median_um'))} µm", "Nearest-neighbour distance"),
+        ("Boundary density", f"{fmt_metric(row_get(wsi_row, 'wsi_tumor_boundary_density_per_mm'))} mm⁻¹", "Perimeter normalized by tumour area"),
     ]
 
     for i, metric in enumerate(metrics):
@@ -875,14 +1091,14 @@ def generate_tumor_morphology_analysis_png(
     area_vals = plot_df["tumor_area_mm2"].astype(float).to_numpy()
     frac_vals = plot_df["tumor_fraction_of_cluster"].astype(float).to_numpy() * 100.0
     island_vals = plot_df["tumor_n_islands"].astype(float).to_numpy()
-    frag_vals = plot_df["tumor_fragmentation_index"].astype(float).to_numpy()
+    lpi_vals = plot_df["tumor_largest_patch_index"].astype(float).to_numpy()
     labels = plot_df["cluster_label"].tolist()
 
     chart_specs = [
         ("Tumour area by cluster", "Area (mm²)", area_vals, 2),
         ("Tumour fraction by cluster", "Fraction (%)", frac_vals, 1),
         ("Tumour islands by cluster", "Island count", island_vals, 0),
-        ("Fragmentation by cluster", "Fragmentation index", frag_vals, 2),
+        ("Largest patch index by cluster", "Largest patch index", lpi_vals, 2),
     ]
 
     for idx, (title, ylabel, vals, decimals) in enumerate(chart_specs):
@@ -902,7 +1118,7 @@ def generate_tumor_morphology_analysis_png(
     size_scaled = 250 + 1800 * sizes / max(float(np.nanmax(sizes)), 1e-12)
     ax_bubble.scatter(
         plot_df["tumor_n_islands"],
-        plot_df["tumor_fragmentation_index"],
+        plot_df["tumor_largest_patch_index"],
         s=size_scaled,
         alpha=0.65,
         edgecolors="#111827",
@@ -911,16 +1127,16 @@ def generate_tumor_morphology_analysis_png(
     for _, row in plot_df.iterrows():
         ax_bubble.text(
             row["tumor_n_islands"],
-            row["tumor_fragmentation_index"],
+            row["tumor_largest_patch_index"],
             f"C{int(row['cluster_id'])}",
             fontsize=9,
             ha="center",
             va="center",
             weight="bold",
         )
-    ax_bubble.set_title("Fragmentation landscape", fontsize=12, weight="bold")
+    ax_bubble.set_title("Tumor island organization", fontsize=12, weight="bold")
     ax_bubble.set_xlabel("Number of tumour islands")
-    ax_bubble.set_ylabel("Fragmentation index")
+    ax_bubble.set_ylabel("Largest patch index")
     ax_bubble.spines[["top", "right"]].set_visible(False)
     ax_bubble.grid(alpha=0.25)
 
@@ -954,18 +1170,14 @@ def save_tumor_morphology_plots(
     cards, or explanatory report layout can be added later in the QMD.
 
     Writes, when the required columns are available:
-        tumor_area_by_cluster.png
-        tumor_fraction_by_cluster.png
-        tumor_islands_by_cluster.png
-        tumor_fragmentation_by_cluster.png
-        tumor_fragmentation_landscape.png
+        tumour morphology plot PNGs  (only when cfg.MORPHOLOGY_SAVE_PLOTS = True)
     """
     plot_paths: Dict[str, Optional[str]] = {
         "tumor_area_by_cluster_png": None,
         "tumor_fraction_by_cluster_png": None,
         "tumor_islands_by_cluster_png": None,
-        "tumor_fragmentation_by_cluster_png": None,
-        "tumor_fragmentation_landscape_png": None,
+        "tumor_largest_patch_index_by_cluster_png": None,
+        "tumor_island_organization_png": None,
     }
 
     if core_features is None or core_features.empty:
@@ -1057,18 +1269,18 @@ def save_tumor_morphology_plots(
         decimals=0,
     )
 
-    plot_paths["tumor_fragmentation_by_cluster_png"] = _save_bar(
-        column="tumor_fragmentation_index",
-        ylabel="Fragmentation index",
-        title="Fragmentation by cluster",
-        filename="tumor_fragmentation_by_cluster.png",
+    plot_paths["tumor_largest_patch_index_by_cluster_png"] = _save_bar(
+        column="tumor_largest_patch_index",
+        ylabel="Largest patch index",
+        title="Largest patch index by cluster",
+        filename="tumor_largest_patch_index_by_cluster.png",
         decimals=2,
     )
 
-    landscape_required = ["tumor_n_islands", "tumor_fragmentation_index", "tumor_area_mm2"]
+    landscape_required = ["tumor_n_islands", "tumor_largest_patch_index", "tumor_area_mm2"]
     missing_landscape = [c for c in landscape_required if c not in plot_df.columns]
     if missing_landscape:
-        print(f"  Skipped tumor_fragmentation_landscape.png: missing columns {missing_landscape}")
+        print(f"  Skipped tumor_island_organization.png: missing columns {missing_landscape}")
         return plot_paths
 
     fig, ax = plt.subplots(figsize=(8.5, 5.6), dpi=180)
@@ -1080,7 +1292,7 @@ def save_tumor_morphology_plots(
 
     ax.scatter(
         plot_df["tumor_n_islands"],
-        plot_df["tumor_fragmentation_index"],
+        plot_df["tumor_largest_patch_index"],
         s=size_scaled,
         alpha=0.65,
         edgecolors="black",
@@ -1090,7 +1302,7 @@ def save_tumor_morphology_plots(
     for _, row in plot_df.iterrows():
         ax.text(
             row["tumor_n_islands"],
-            row["tumor_fragmentation_index"],
+            row["tumor_largest_patch_index"],
             f"C{int(row['cluster_id'])}",
             fontsize=9,
             ha="center",
@@ -1098,17 +1310,17 @@ def save_tumor_morphology_plots(
             weight="bold",
         )
 
-    ax.set_title("Fragmentation landscape", fontsize=14, weight="bold")
+    ax.set_title("Tumor island organization", fontsize=14, weight="bold")
     ax.set_xlabel("Number of tumour islands")
-    ax.set_ylabel("Fragmentation index")
+    ax.set_ylabel("Largest patch index")
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(alpha=0.25)
 
     fig.tight_layout()
-    out_path = out_dir / "tumor_fragmentation_landscape.png"
+    out_path = out_dir / "tumor_island_organization.png"
     fig.savefig(out_path, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    plot_paths["tumor_fragmentation_landscape_png"] = str(out_path)
+    plot_paths["tumor_island_organization_png"] = str(out_path)
     print(f"  Wrote: {out_path.name}")
 
     return plot_paths
@@ -1141,8 +1353,8 @@ def run_tumor_morphology_features(
         tumor_area_by_cluster.png
         tumor_fraction_by_cluster.png
         tumor_islands_by_cluster.png
-        tumor_fragmentation_by_cluster.png
-        tumor_fragmentation_landscape.png
+        tumor_largest_patch_index_by_cluster.png
+        tumor_island_organization.png
 
     Parameters
     ----------
@@ -1151,7 +1363,12 @@ def run_tumor_morphology_features(
         Knobs (all with fallbacks):
             cfg.MPP
             cfg.MORPHOLOGY_MIN_ISLAND_AREA_UM2  (default 1000.0)
+            cfg.MORPHOLOGY_FD_NUM_SCALES       (default 10)
+            cfg.MORPHOLOGY_FD_MIN_VALID_SCALES (default 5)
+            cfg.MORPHOLOGY_FD_FINE_DIVISOR     (default 50.0)
+            cfg.MORPHOLOGY_FD_COARSE_DIVISOR   (default 4.0)
             cfg.MORPHOLOGY_SAVE_ISLAND_QC       (default False)
+            cfg.MORPHOLOGY_SAVE_PLOTS           (default False; QMD uses CSVs)
             cfg.MORPHOLOGY_TUMOR_CLASS_NAMES    (default {"Tumour","Tumor","tumour","tumor"})
 
     Returns
@@ -1191,7 +1408,20 @@ def run_tumor_morphology_features(
 
     mpp               = getattr(cfg, "MPP",                          0.25)
     min_island_area   = getattr(cfg, "MORPHOLOGY_MIN_ISLAND_AREA_UM2", RECOMMENDED_MIN_ISLAND_AREA_UM2)
-    save_island_qc    = getattr(cfg, "MORPHOLOGY_SAVE_ISLAND_QC",      False)
+    fd_num_scales = int(getattr(
+        cfg, "MORPHOLOGY_FD_NUM_SCALES", DEFAULT_FD_NUM_SCALES
+    ))
+    fd_min_valid_scales = int(getattr(
+        cfg, "MORPHOLOGY_FD_MIN_VALID_SCALES", DEFAULT_FD_MIN_VALID_SCALES
+    ))
+    fd_fine_divisor = float(getattr(
+        cfg, "MORPHOLOGY_FD_FINE_DIVISOR", DEFAULT_FD_FINE_DIVISOR
+    ))
+    fd_coarse_divisor = float(getattr(
+        cfg, "MORPHOLOGY_FD_COARSE_DIVISOR", DEFAULT_FD_COARSE_DIVISOR
+    ))
+    save_island_qc    = bool(getattr(cfg, "MORPHOLOGY_SAVE_ISLAND_QC", False))
+    save_plots        = bool(getattr(cfg, "MORPHOLOGY_SAVE_PLOTS", False))
     tumor_class_names = getattr(cfg, "MORPHOLOGY_TUMOR_CLASS_NAMES",   DEFAULT_TUMOR_CLASS_NAMES)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1200,28 +1430,63 @@ def run_tumor_morphology_features(
     print(f"  Tumour morphology features")
     print(f"  Slide              : {slide_name}")
     print(f"  min_island_area_um2: {min_island_area:.0f}")
+    print(
+        f"  FD scales            : {fd_num_scales} "
+        f"(valid >= {fd_min_valid_scales}; "
+        f"extent/{fd_fine_divisor:g} to extent/{fd_coarse_divisor:g})"
+    )
     print(f"  Clusters           : {cluster_geojson.name}")
+    print(f"  Save island QC     : {save_island_qc}")
+    print(f"  Save plots         : {save_plots}")
     print(f"  Output             : {out_dir}")
     print(f"{'='*55}")
 
+    t_stage = time.perf_counter()
     clusters = load_cluster_polygons(cluster_geojson)
-    tumors   = load_tumor_regions(seg_geojson, tumor_class_names)
+    print(f"  Loaded clusters in {time.perf_counter() - t_stage:.2f}s")
 
-    features, islands = extract_all_clusters(clusters, tumors, mpp, min_island_area)
-    core    = select_core_features(features)
+    t_stage = time.perf_counter()
+    tumors = load_tumor_regions(seg_geojson, tumor_class_names)
+    print(f"  Loaded tumour polygons in {time.perf_counter() - t_stage:.2f}s")
+
+    t_stage = time.perf_counter()
+    features, islands = extract_all_clusters(
+        clusters,
+        tumors,
+        mpp,
+        min_island_area,
+        fd_num_scales=fd_num_scales,
+        fd_min_valid_scales=fd_min_valid_scales,
+        fd_fine_divisor=fd_fine_divisor,
+        fd_coarse_divisor=fd_coarse_divisor,
+        collect_island_rows=save_island_qc,
+    )
+    print(f"  Morphology extraction in {time.perf_counter() - t_stage:.2f}s")
+
+    core = select_core_features(features)
     summary = compute_wsi_summary(features, islands)
 
-    core_csv    = out_dir / "tumor_core_features_by_cluster.csv"
+    core_csv = out_dir / "tumor_core_features_by_cluster.csv"
     summary_csv = out_dir / "tumor_core_wsi_summary.csv"
     core.to_csv(core_csv, index=False)
     summary.to_csv(summary_csv, index=False)
     print(f"  Wrote: {core_csv.name}")
     print(f"  Wrote: {summary_csv.name}")
 
-    morphology_plots = save_tumor_morphology_plots(
-        core_features=core,
-        out_dir=out_dir,
-    )
+    morphology_plots = {
+        "tumor_area_by_cluster_png": None,
+        "tumor_fraction_by_cluster_png": None,
+        "tumor_islands_by_cluster_png": None,
+        "tumor_largest_patch_index_by_cluster_png": None,
+        "tumor_island_organization_png": None,
+    }
+    if save_plots:
+        t_stage = time.perf_counter()
+        morphology_plots = save_tumor_morphology_plots(
+            core_features=core,
+            out_dir=out_dir,
+        )
+        print(f"  Morphology plots in {time.perf_counter() - t_stage:.2f}s")
 
     island_qc_csv = None
     if save_island_qc and not islands.empty:
@@ -1237,10 +1502,20 @@ def run_tumor_morphology_features(
     print(f"  Clusters scored:         {len(core)}")
     if "tumor_area_mm2" in core.columns:
         print(f"  Total tumour area:       {core['tumor_area_mm2'].sum():.3f} mm²")
+    if "tumor_perimeter_mm" in core.columns:
+        print(f"  Total tumour perimeter:  {core['tumor_perimeter_mm'].sum():.3f} mm")
+    if "tumor_boundary_density_per_mm" in core.columns:
+        total_area = core["tumor_area_mm2"].sum()
+        total_perim = core["tumor_perimeter_mm"].sum()
+        bd = total_perim / total_area if total_area > 0 else np.nan
+        print(f"  Boundary density:        {bd:.3f} mm^-1")
+    if "tumor_boundary_fractal_dimension" in core.columns:
+        n_fd = int(core["tumor_boundary_fractal_dimension"].notna().sum())
+        print(f"  Valid boundary FD:       {n_fd}/{len(core)} clusters")
     if "tumor_n_islands" in core.columns:
         print(f"  Total islands (filtered):{int(core['tumor_n_islands'].fillna(0).sum())}")
-    if "tumor_fragmentation_index" in valid.columns:
-        print(f"  Mean fragmentation index:{valid['tumor_fragmentation_index'].mean():.3f}")
+    if "tumor_largest_patch_index" in valid.columns:
+        print(f"  Mean largest patch index:{valid['tumor_largest_patch_index'].mean():.3f}")
     if "tumor_compactness_mean" in valid.columns:
         print(f"  Mean compactness:        {valid['tumor_compactness_mean'].mean():.3f}")
     print(f"\n  Done.")

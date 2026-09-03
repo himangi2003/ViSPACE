@@ -92,7 +92,7 @@ class PipelineConfig:
 
 
     # ── Mussel (tessellation) ───────────────────────────────────────────────
-    MPP:            float = 0.25                # microns-per-pixel  (40x TCGA)
+    MPP:            float = 0.25                # microns-per-pixel  (40x TCGA) not to changed 
     PATCH_SIZE:     int   = 224                 # tile edge in pixels
     WORKERS:        int   = 4                   # parallel tiling workers
     SEGMENT_THRESH: int   = 20                  # Otsu tissue-mask threshold
@@ -114,40 +114,137 @@ class PipelineConfig:
     THUMB_MAX:      int   = 2048                # thumbnail max size
 
     # ── Stage 4: Tumor ROI Overlay ──────────────────────────────────────────
-    ROI_SIZE_UM:           float = 50.00   # ROI box edge in microns
-    ROI_MIN_TUMOR_FRAC:    float = 0.20    # min frac_Tumour to keep a tile
-    ROI_MAX_NECROSIS:      float = 0.50    # max mean frac_Necrosis inside a box
-    ROI_MIN_CLUSTER_TILES: int   = 5       # min tiles to keep a tumour clump
-    ROI_CONNECTIVITY:      int   = 8       # grid connectivity: 4 or 8
-    ROI_MERGE_GAP_UM:      float = 60.0    # clumps within this gap (µm) are merged
-    ROI_THUMB_WIDTH:       int   = 1800    # WSI thumbnail width for overlay PNG
-    ROI_COLOR_BY_CLUSTER:  bool  = True    # colour ROI boxes by cluster ID
+    # ============================================================
+    # TUMOR ROI / TUMOR FOCUS PARAMETERS
+    # ============================================================
+    
 
-    # ── Stage 5: Cluster TSR / sTILs scoring ───────────────────────────────
-    TILS_DENOMINATOR:            str   = "salgado"
-    #   "salgado"                   → Inflammatory / Stroma             (recommended)
-    #   "stroma_plus_inflammatory"  → Inflammatory / (Stroma + Inflam)
-    #   "tissue"                    → Inflammatory / viable tissue
-    CLUSTER_BUFFER_UM:           float = 50.0  # buffer around ROI boxes → scoring polygon
-    CLUSTER_MIN_ROI_BOXES:       int   = 1     # min ROI boxes to keep a cluster
-    CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0   # minimum GeoJSON polygon area filter
-    CLUSTER_MAX_AREA_QUANTILE:   float = 1.0    # upper area quantile filter (1.0 = off)
-    CLUSTER_MAX_AREA_MAD_Z:      float = 0.0    # MAD-z outlier rejection (0.0 = off)
-    CLUSTER_MIN_TISSUE_FRACTION: float = 0.10   # reliability gate: min segmented fraction
-    CLUSTER_MIN_TSR_DENOM_PX2:   float = 5000.0 # min TSR denominator area (px²)
-    CLUSTER_MIN_TILS_DENOM_PX2:  float = 5000.0 # min sTILs denominator area (px²)
-    CLUSTER_NO_OVERLAY:          bool  = False   # skip rendering the overlay PNG
+    # --- Tumour focus detection + representative tumour ROI sampling ------------
+    ROI_SIZE_UM: float = 200.0
+    ROI_MIN_TUMOR_FRAC: float = 0.20
+    ROI_FOCUS_REPAIR_GAP_UM: float = 25.0
+    ROI_MIN_FOCUS_AREA_UM2: float = 40000.0  # good starting point for suppressing tiny foci
+    ROI_MIN_ROI_TUMOR_FRAC: float = 0.30
+    ROI_MAX_NECROSIS: float = 0.50
+    
+    # Candidate-centre ranking score:
+    #   tumor_weight * frac_Tumour
+    # + neighbor_weight * local_neighbor_tumor_mean
+    # - necrosis_penalty * frac_Necrosis
+    ROI_TUMOR_SIGNAL_WEIGHT: float = 1.0
+    ROI_NEIGHBOR_TUMOR_WEIGHT: float = 0.5
+    ROI_NECROSIS_PENALTY: float = 0.5
+    
+    # Representative sampling rather than full-clump tiling.
+    # 0 restores unlimited sampling; a finite value is recommended.
+    ROI_MAX_ROIS_PER_FOCUS: int = 3
+    
+    # --- Inter-tumour graph / tissue-aware path ----------------------------------
+    INTER_TUMOR_MIN_GAP_UM: float = 50.0
+    INTER_TUMOR_MAX_GAP_UM: float = 1000.0
+    INTER_TUMOR_KNN_K: int = 3
+    INTER_TUMOR_CORRIDOR_WIDTH_UM: float = 100.0
+    INTER_TUMOR_SEARCH_MARGIN_UM: float = 500.0
+    
+    # A* tissue costs are already config-driven in cluster_tils_tsr_scoring.py.
+    INTER_PATH_TUMOR_WEIGHT: float = 5.0
+    INTER_PATH_NECROSIS_WEIGHT: float = 6.0
+    INTER_PATH_OTHER_WEIGHT: float = 1.0
+    
+    # --- Inter-tumour ROI + Master ROI -------------------------------------------
+    INTER_TUMOR_ROI_SIZE_UM: float = 200.0
+    INTER_TUMOR_SAMPLE_FRACTIONS = (0.5,)
+    INTER_TUMOR_MAX_TUMOR_FRAC: float = 0.20
+    INTER_TUMOR_MAX_NECROSIS: float = 0.50
+    MASTER_STROMA_MARGIN_UM: float = 50.0
+    
+    # --- Scoring QC ---------------------------------------------------------------
+    CLUSTER_MIN_TISSUE_FRACTION: float = 0.10
+    CLUSTER_MIN_TSR_DENOM_PX2: float = 5000.0
+    CLUSTER_MIN_TILS_DENOM_PX2: float = 5000.0
+    CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0
 
-    # ── Stage 6: Immune proximity features ─────────────────────────────────
-    IMMUNE_PROXIMITY_THRESHOLDS_UM:   list  = field(default_factory=lambda: [20, 50, 100, 200])
-    #   % of TIL area within each threshold distance from the tumour boundary
-    IMMUNE_CONTACT_TOLERANCE_UM:      float = 5.0    # TIL within this = "contact"
-    IMMUNE_DESERT_MAX_AREA_UM2:       float = 1_000.0  # < this → immune-desert phenotype
-    IMMUNE_PENETRATED_MIN_INTRA_FRAC: float = 0.30   # ≥ this intratumoral → penetrated
-    IMMUNE_MARGIN_MIN_PCT_50UM:       float = 50.0   # ≥ this % within 50µm → margin-localized
-    IMMUNE_EXCLUDED_MIN_MEDIAN_UM:    float = 100.0  # median ≥ this → immune-excluded
-    IMMUNE_PERITUMORAL_MAX_MEDIAN_UM: float = 100.0  # median < this → peritumoral
-
+        # ── Stage 5: Cluster TSR / sTILs scoring ───────────────────────────────
+    # ============================================================
+    # CLUSTER / TIL / TSR / INTER-TUMOR PARAMETERS
+    # ============================================================
+    SPATIAL_SCORING_MODE = "fast"
+    
+    # Dense-lattice memory safety guard.
+    SPATIAL_GRID_MAX_CELLS = 25_000_000
+    
+    # ============================================================
+    # FOCUS RELATIONSHIPS
+    # ============================================================
+    
+    # gap < MIN:
+    #   direct Master-ROI merge; NO inter-tumour corridor/TIL is created.
+    # MIN <= gap <= MAX:
+    #   eligible for Dijkstra routing + corridor QC.
+    INTER_TUMOR_MIN_GAP_UM = 50.0
+    INTER_TUMOR_MAX_GAP_UM = 1000.0
+    INTER_TUMOR_KNN_K = 3
+    
+    # ============================================================
+    # TISSUE-AWARE DIJKSTRA ROUTING
+    # ============================================================
+    INTER_TUMOR_CORRIDOR_WIDTH_UM = 100.0
+    INTER_TUMOR_SEARCH_MARGIN_UM = 300.0
+    
+    INTER_PATH_TUMOR_WEIGHT = 5.0
+    INTER_PATH_NECROSIS_WEIGHT = 6.0
+    INTER_PATH_OTHER_WEIGHT = 1.0
+    
+    # ============================================================
+    # CORRIDOR QC
+    # ============================================================
+    INTER_CORRIDOR_MAX_TUMOR_FRAC = 0.20
+    INTER_CORRIDOR_MAX_NECROSIS_FRAC = 0.30
+    INTER_CORRIDOR_MIN_STROMAL_LIKE_FRAC = 0.30
+    INTER_CORRIDOR_MIN_TISSUE_FRACTION = 0.50
+    INTER_CORRIDOR_MIN_PATH_EFFICIENCY = 0.50
+    
+    # ============================================================
+    # REPRESENTATIVE INTER-TUMOUR ROI SAMPLING
+    # ============================================================
+    INTER_TUMOR_ROI_SIZE_UM = 200.0
+    INTER_TUMOR_SAMPLE_FRACTIONS = (0.5,)
+    INTER_TUMOR_MAX_TUMOR_FRAC = 0.20
+    INTER_TUMOR_MAX_NECROSIS = 0.50
+    
+    # ============================================================
+    # MASTER ROI / SCORING QC
+    # ============================================================
+    MASTER_STROMA_MARGIN_UM = 100.0
+    CLUSTER_MIN_TISSUE_FRACTION = 0.10
+    CLUSTER_MIN_TSR_DENOM_PX2 = 5000.0
+    CLUSTER_MIN_TILS_DENOM_PX2 = 5000.0
+    
+    # Exact-vector refinement only.
+    CLUSTER_MIN_POLYGON_AREA_PX2 = 1.0
+    
+    # % inflammatory area within each distance from the tumor boundary
+    IMMUNE_PROXIMITY_THRESHOLDS_UM: list = field(
+        default_factory=lambda: [50, 100, 200]
+    )
+    
+    # Inflammatory tissue within 5 µm of tumor boundary = contact
+    IMMUNE_CONTACT_TOLERANCE_UM: float = 5.0
+    
+    # Immune phenotype thresholds
+    IMMUNE_DESERT_MAX_AREA_UM2: float = 1_000.0
+    
+    # ≥30% of inflammatory area intratumoral = immune-penetrated
+    IMMUNE_PENETRATED_MIN_INTRA_FRAC: float = 0.30
+    
+    # ≥50% of inflammatory area within 50 µm = margin-localized
+    IMMUNE_MARGIN_MIN_PCT_50UM: float = 50.0
+    
+    # Median extratumoral distance ≥100 µm = immune-excluded
+    IMMUNE_EXCLUDED_MIN_MEDIAN_UM: float = 100.0
+    
+    # Median extratumoral distance <100 µm = peritumoral
+    IMMUNE_PERITUMORAL_MAX_MEDIAN_UM: float = 100.0
     # ── Stage 7: Necrosis proximity features ─────────────────────────────────
     NECROSIS_MIN_COMPONENT_AREA_UM2: float = 500.0
     # Noise filter: necrosis polygon components smaller than this (µm²) are
@@ -163,18 +260,26 @@ class PipelineConfig:
     # necrosis in invasive breast carcinoma (WHO 2019).
 
     # ── Stage 8: Tumour morphology features ────────────────────────────────
-    MORPHOLOGY_MIN_ISLAND_AREA_UM2: float = 1_000.0
-    #   Islands smaller than this are excluded from shape and fragmentation
-    #   metrics.  Default 1000 µm² ≈ 32µm side ≈ 5 cells.  Set to 0 to keep
-    #   all islands (not recommended — single-cell fragments distort metrics).
-    #   Always report this value alongside any shape metric you publish.
-    MORPHOLOGY_SAVE_ISLAND_QC:      bool  = False
-    #   If True, write tumor_island_qc.csv with per-island geometry stats.
-    #   Useful for choosing an appropriate MORPHOLOGY_MIN_ISLAND_AREA_UM2.
-    MORPHOLOGY_TUMOR_CLASS_NAMES:   set   = field(
+
+    # Stage 8: Tumour morphology features
+
+    MORPHOLOGY_MIN_ISLAND_AREA_UM2: float = 1000.0
+    
+    # Vector box-counting tumour-boundary fractal dimension.
+    # Scales are relative to each tumour geometry's own maximum dimension:
+    #   finest box  = max_dimension / 50
+    #   coarsest box = max_dimension / 4
+    MORPHOLOGY_FD_NUM_SCALES: int = 10
+    MORPHOLOGY_FD_MIN_VALID_SCALES: int = 5
+    MORPHOLOGY_FD_FINE_DIVISOR: float = 50.0
+    MORPHOLOGY_FD_COARSE_DIVISOR: float = 4.0
+    
+    MORPHOLOGY_SAVE_ISLAND_QC: bool = False
+    
+    MORPHOLOGY_TUMOR_CLASS_NAMES: set = field(
         default_factory=lambda: {"Tumour", "Tumor", "tumour", "tumor"}
     )
-
+    
 
     # ── Convenience properties (read-only) ─────────────────────────────────
     @property
