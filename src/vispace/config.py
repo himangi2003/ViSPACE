@@ -139,90 +139,52 @@ class PipelineConfig:
     # 0 restores unlimited sampling; a finite value is recommended.
     ROI_MAX_ROIS_PER_FOCUS: int = 3
     
-    # --- Inter-tumour graph / tissue-aware path ----------------------------------
+    # ── Stage 5: Cluster TSR / sTILs scoring ───────────────────────────────
+    # Every field below MUST carry a type annotation. Un-annotated class
+    # attributes are NOT dataclass fields: they would be silently dropped from
+    # fields(), from the auto-generated CLI flags, and from `--print-config`
+    # (which serialises the instance __dict__), and could not be overridden via
+    # dataclasses.replace(). They would still be readable via getattr() at
+    # runtime, which is exactly why such bugs go unnoticed.
+
+    SPATIAL_SCORING_MODE: str = "fast"          # "fast" or "refine"
+    SPATIAL_GRID_MAX_CELLS: int = 25_000_000    # dense-lattice memory safety guard
+
+    # --- Focus relationships -----------------------------------------------------
+    # gap < MIN_GAP:              direct Master-ROI merge; no corridor/TIL created.
+    # MIN_GAP <= gap <= MAX_GAP:  eligible for Dijkstra routing + corridor QC.
     INTER_TUMOR_MIN_GAP_UM: float = 50.0
     INTER_TUMOR_MAX_GAP_UM: float = 1000.0
     INTER_TUMOR_KNN_K: int = 3
-    INTER_TUMOR_CORRIDOR_WIDTH_UM: float = 100.0
-    INTER_TUMOR_SEARCH_MARGIN_UM: float = 500.0
-    
+
+    # --- Tissue-aware Dijkstra routing -------------------------------------------
     # A* tissue costs are already config-driven in cluster_tils_tsr_scoring.py.
+    INTER_TUMOR_CORRIDOR_WIDTH_UM: float = 100.0
+    INTER_TUMOR_SEARCH_MARGIN_UM: float = 300.0
     INTER_PATH_TUMOR_WEIGHT: float = 5.0
     INTER_PATH_NECROSIS_WEIGHT: float = 6.0
     INTER_PATH_OTHER_WEIGHT: float = 1.0
-    
-    # --- Inter-tumour ROI + Master ROI -------------------------------------------
+
+    # --- Corridor QC -------------------------------------------------------------
+    INTER_CORRIDOR_MAX_TUMOR_FRAC: float = 0.20
+    INTER_CORRIDOR_MAX_NECROSIS_FRAC: float = 0.30
+    INTER_CORRIDOR_MIN_STROMAL_LIKE_FRAC: float = 0.30
+    INTER_CORRIDOR_MIN_TISSUE_FRACTION: float = 0.50
+    INTER_CORRIDOR_MIN_PATH_EFFICIENCY: float = 0.50
+
+    # --- Representative inter-tumour ROI sampling --------------------------------
     INTER_TUMOR_ROI_SIZE_UM: float = 200.0
-    INTER_TUMOR_SAMPLE_FRACTIONS = (0.5,)
+    INTER_TUMOR_SAMPLE_FRACTIONS: list = field(default_factory=lambda: [0.5])
     INTER_TUMOR_MAX_TUMOR_FRAC: float = 0.20
     INTER_TUMOR_MAX_NECROSIS: float = 0.50
-    MASTER_STROMA_MARGIN_UM: float = 50.0
-    
-    # --- Scoring QC ---------------------------------------------------------------
+
+    # --- Master ROI + scoring QC -------------------------------------------------
+    MASTER_STROMA_MARGIN_UM: float = 100.0
     CLUSTER_MIN_TISSUE_FRACTION: float = 0.10
     CLUSTER_MIN_TSR_DENOM_PX2: float = 5000.0
     CLUSTER_MIN_TILS_DENOM_PX2: float = 5000.0
-    CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0
+    CLUSTER_MIN_POLYGON_AREA_PX2: float = 1.0    # exact-vector refinement only
 
-        # ── Stage 5: Cluster TSR / sTILs scoring ───────────────────────────────
-    # ============================================================
-    # CLUSTER / TIL / TSR / INTER-TUMOR PARAMETERS
-    # ============================================================
-    SPATIAL_SCORING_MODE = "fast"
-    
-    # Dense-lattice memory safety guard.
-    SPATIAL_GRID_MAX_CELLS = 25_000_000
-    
-    # ============================================================
-    # FOCUS RELATIONSHIPS
-    # ============================================================
-    
-    # gap < MIN:
-    #   direct Master-ROI merge; NO inter-tumour corridor/TIL is created.
-    # MIN <= gap <= MAX:
-    #   eligible for Dijkstra routing + corridor QC.
-    INTER_TUMOR_MIN_GAP_UM = 50.0
-    INTER_TUMOR_MAX_GAP_UM = 1000.0
-    INTER_TUMOR_KNN_K = 3
-    
-    # ============================================================
-    # TISSUE-AWARE DIJKSTRA ROUTING
-    # ============================================================
-    INTER_TUMOR_CORRIDOR_WIDTH_UM = 100.0
-    INTER_TUMOR_SEARCH_MARGIN_UM = 300.0
-    
-    INTER_PATH_TUMOR_WEIGHT = 5.0
-    INTER_PATH_NECROSIS_WEIGHT = 6.0
-    INTER_PATH_OTHER_WEIGHT = 1.0
-    
-    # ============================================================
-    # CORRIDOR QC
-    # ============================================================
-    INTER_CORRIDOR_MAX_TUMOR_FRAC = 0.20
-    INTER_CORRIDOR_MAX_NECROSIS_FRAC = 0.30
-    INTER_CORRIDOR_MIN_STROMAL_LIKE_FRAC = 0.30
-    INTER_CORRIDOR_MIN_TISSUE_FRACTION = 0.50
-    INTER_CORRIDOR_MIN_PATH_EFFICIENCY = 0.50
-    
-    # ============================================================
-    # REPRESENTATIVE INTER-TUMOUR ROI SAMPLING
-    # ============================================================
-    INTER_TUMOR_ROI_SIZE_UM = 200.0
-    INTER_TUMOR_SAMPLE_FRACTIONS = (0.5,)
-    INTER_TUMOR_MAX_TUMOR_FRAC = 0.20
-    INTER_TUMOR_MAX_NECROSIS = 0.50
-    
-    # ============================================================
-    # MASTER ROI / SCORING QC
-    # ============================================================
-    MASTER_STROMA_MARGIN_UM = 100.0
-    CLUSTER_MIN_TISSUE_FRACTION = 0.10
-    CLUSTER_MIN_TSR_DENOM_PX2 = 5000.0
-    CLUSTER_MIN_TILS_DENOM_PX2 = 5000.0
-    
-    # Exact-vector refinement only.
-    CLUSTER_MIN_POLYGON_AREA_PX2 = 1.0
-    
     # % inflammatory area within each distance from the tumor boundary
     IMMUNE_PROXIMITY_THRESHOLDS_UM: list = field(
         default_factory=lambda: [50, 100, 200]
