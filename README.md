@@ -181,6 +181,58 @@ Complete instructions are provided in **Chapter 1** of the Vispace User Manual i
 
 ---
 
+# Model Weights
+
+ViSPACE relies on two separate sets of weights:
+
+1. **Virchow2 encoder** — the foundation model that embeds each tile. It is
+   **not bundled**: download it from the gated Hugging Face repository
+   [`paige-ai/Virchow2`](https://huggingface.co/paige-ai/Virchow2) (see
+   *Hugging Face Authentication* above), or point `VIRCHOW2_PATH` at a local copy.
+   Access is gated — first request it (free) on the model page at
+   <https://huggingface.co/paige-ai/Virchow2> and authenticate with your Hugging
+   Face token before the first run; the weights download automatically once granted.
+2. **ViSPACE segmentation decoder** — the lightweight head that turns Virchow2
+   features into the five-class tissue mask. Two trained checkpoints **ship
+   inside the installed package** under `vispace/assets/weights/`, so no
+   download is required:
+
+   | Checkpoint | Trained on | Use for |
+   |---|---|---|
+   | `TNBC_best.pt` *(default)* | TCGA breast / TNBC (BCSS) | breast / general H&E |
+   | `IGNITE_lung_best.pt` | IGNITE lung cohort | lung H&E |
+
+**Selecting the decoder.** `CHECKPOINT` defaults to the bundled `TNBC_best.pt`.
+To use the lung decoder (or your own `.pt`), set `CHECKPOINT` to its path.
+
+*Python:*
+
+```python
+from pathlib import Path
+import vispace
+from vispace import PipelineConfig
+
+weights = Path(vispace.__file__).parent / "assets" / "weights"
+
+cfg = PipelineConfig(
+    WSI_PATH   = "slides/your_lung_slide.svs",
+    CHECKPOINT = str(weights / "IGNITE_lung_best.pt"),   # lung cohort
+    # omit CHECKPOINT entirely to use the default TNBC_best.pt
+)
+```
+
+*CLI:*
+
+```bash
+# print the bundled weights directory, then pass the checkpoint you want
+python -c "import vispace, pathlib; print(pathlib.Path(vispace.__file__).parent / 'assets' / 'weights')"
+
+vispace --wsi-path slides/your_lung_slide.svs \
+        --checkpoint /path/to/vispace/assets/weights/IGNITE_lung_best.pt
+```
+
+---
+
 # Environment Check (Optional)
 
 Before processing any slide, verify the installation with the `vispace-check`
@@ -219,17 +271,35 @@ vispace-check
 ```
 
 If `import vispace` succeeds and `vispace --help` prints the flag list, the
-package, its dependencies, and the bundled model checkpoint are all resolvable.
+package, its dependencies, and the bundled model checkpoints are all resolvable.
 
-**2. Single-stage test on a real slide** — the cheapest stage that exercises the
-GPU and the model:
+**2. End-to-end test on a slide** with the bundled runner, `tests/run_test_vispace.py`.
+It runs the full 8-stage pipeline on every slide in `tests/data/` and prints a
+per-stage PASS/FAIL summary (exit code 0 = all passed). Slides are large and
+should **not** be committed — `tests/data/` already git-ignores them, so just
+drop a slide in:
 
 ```bash
-vispace --wsi-path /path/to/slide.svs --stages tessellation,segmentation
+# copy or download a whole-slide image into tests/data/ (e.g. tests/data/test_slide.tif)
+python tests/run_test_vispace.py            # DEVICE from the config default
+VISPACE_DEVICE=cpu python tests/run_test_vispace.py   # force CPU (slower, no GPU)
 ```
 
-**3. Adding a formal test suite (optional).** `pytest` is the natural fit — put
-tests under `tests/` and run them with an editable install:
+With no slide in `tests/data/` the runner prints a notice and exits 0, so it is
+safe to run on a clean checkout. To exercise only the GPU + Virchow2 path
+without the full pipeline, run the two heaviest stages directly:
+
+```bash
+vispace --wsi-path tests/data/test_slide.tif --stages tessellation,segmentation
+```
+
+The tutorial notebook (`notebooks/ViSpace_tutorial.ipynb`) auto-discovers the
+first slide in `tests/data/` — or set `VISPACE_WSI=/path/to/slide.tif` — so the
+same test slide drives the runner, the CLI, and the notebook. To test the
+**lung** decoder, add `--checkpoint <path>/IGNITE_lung_best.pt` (see *Model Weights*).
+
+**3. Adding a formal unit-test suite (optional).** `pytest` is the natural fit —
+put tests under `tests/` and run them with an editable install:
 
 ```bash
 pip install -e . pytest
