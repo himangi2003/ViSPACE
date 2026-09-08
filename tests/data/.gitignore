@@ -1,0 +1,8 @@
+# Test slides are large — keep them out of git, but keep this folder tracked.
+*.tif
+*.tiff
+*.svs
+*.ndpi
+*.scn
+*.mrxs
+!.gitignore

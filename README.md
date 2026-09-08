@@ -189,6 +189,9 @@ ViSPACE relies on two separate sets of weights:
    **not bundled**: download it from the gated Hugging Face repository
    [`paige-ai/Virchow2`](https://huggingface.co/paige-ai/Virchow2) (see
    *Hugging Face Authentication* above), or point `VIRCHOW2_PATH` at a local copy.
+   Access is gated — first request it (free) on the model page at
+   <https://huggingface.co/paige-ai/Virchow2> and authenticate with your Hugging
+   Face token before the first run; the weights download automatically once granted.
 2. **ViSPACE segmentation decoder** — the lightweight head that turns Virchow2
    features into the five-class tissue mask. Two trained checkpoints **ship
    inside the installed package** under `vispace/assets/weights/`, so no
