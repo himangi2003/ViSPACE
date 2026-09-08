@@ -181,6 +181,55 @@ Complete instructions are provided in **Chapter 1** of the Vispace User Manual i
 
 ---
 
+# Model Weights
+
+ViSPACE relies on two separate sets of weights:
+
+1. **Virchow2 encoder** — the foundation model that embeds each tile. It is
+   **not bundled**: download it from the gated Hugging Face repository
+   [`paige-ai/Virchow2`](https://huggingface.co/paige-ai/Virchow2) (see
+   *Hugging Face Authentication* above), or point `VIRCHOW2_PATH` at a local copy.
+2. **ViSPACE segmentation decoder** — the lightweight head that turns Virchow2
+   features into the five-class tissue mask. Two trained checkpoints **ship
+   inside the installed package** under `vispace/assets/weights/`, so no
+   download is required:
+
+   | Checkpoint | Trained on | Use for |
+   |---|---|---|
+   | `TNBC_best.pt` *(default)* | TCGA breast / TNBC (BCSS) | breast / general H&E |
+   | `IGNITE_lung_best.pt` | IGNITE lung cohort | lung H&E |
+
+**Selecting the decoder.** `CHECKPOINT` defaults to the bundled `TNBC_best.pt`.
+To use the lung decoder (or your own `.pt`), set `CHECKPOINT` to its path.
+
+*Python:*
+
+```python
+from pathlib import Path
+import vispace
+from vispace import PipelineConfig
+
+weights = Path(vispace.__file__).parent / "assets" / "weights"
+
+cfg = PipelineConfig(
+    WSI_PATH   = "slides/your_lung_slide.svs",
+    CHECKPOINT = str(weights / "IGNITE_lung_best.pt"),   # lung cohort
+    # omit CHECKPOINT entirely to use the default TNBC_best.pt
+)
+```
+
+*CLI:*
+
+```bash
+# print the bundled weights directory, then pass the checkpoint you want
+python -c "import vispace, pathlib; print(pathlib.Path(vispace.__file__).parent / 'assets' / 'weights')"
+
+vispace --wsi-path slides/your_lung_slide.svs \
+        --checkpoint /path/to/vispace/assets/weights/IGNITE_lung_best.pt
+```
+
+---
+
 # Environment Check (Optional)
 
 Before processing any slide, verify the installation with the `vispace-check`
@@ -219,14 +268,30 @@ vispace-check
 ```
 
 If `import vispace` succeeds and `vispace --help` prints the flag list, the
-package, its dependencies, and the bundled model checkpoint are all resolvable.
+package, its dependencies, and the bundled model checkpoints are all resolvable.
 
-**2. Single-stage test on a real slide** — the cheapest stage that exercises the
-GPU and the model:
+**2. End-to-end test on a slide.** Place one whole-slide image under
+`tests/data/`, then run the pipeline on it. Slides are large and should **not**
+be committed — create the folder and git-ignore the slides:
 
 ```bash
-vispace --wsi-path /path/to/slide.svs --stages tessellation,segmentation
+mkdir -p tests/data
+echo -e "*.tif\n*.svs" > tests/data/.gitignore   # keep large slides out of git
+# copy or download a slide into tests/data/ (e.g. tests/data/test_slide.tif)
 ```
+
+```bash
+# fastest check: only the two stages that exercise the GPU + Virchow2 encoder
+vispace --wsi-path tests/data/test_slide.tif --stages tessellation,segmentation
+
+# or the full 8-stage pipeline
+vispace --wsi-path tests/data/test_slide.tif --out-dir vispace_output
+```
+
+The tutorial notebook (`notebooks/ViSpace_tutorial.ipynb`) auto-discovers the
+first slide in `tests/data/` — or set `VISPACE_WSI=/path/to/slide.tif` — so the
+same test slide drives both the CLI and the notebook. To test the **lung**
+decoder, add `--checkpoint <path>/IGNITE_lung_best.pt` (see *Model Weights*).
 
 **3. Adding a formal test suite (optional).** `pytest` is the natural fit — put
 tests under `tests/` and run them with an editable install:
