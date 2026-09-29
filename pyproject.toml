@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vispace"
 dynamic = ["version"]
-description = "Virchow2 powered Spatial Characterization And feature Extraction pipeline for whole-slide images"
+description = "Virchow2 powered Spatial Characterization And feature Extraction pipeline for whole-slide images in Lung Cancer and Breast Cancer"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [

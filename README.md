@@ -1,9 +1,9 @@
 # ViSPACE — Virchow2 powered Spatial Characterization and feature Extraction Pipeline
 
 ViSPACE is an end-to-end computational pathology pipeline for analysing
-whole-slide images (WSIs). The pipeline combines the Virchow2 foundation
+whole-slide images (WSIs)in Lung Cancer and Breast Cancer. The pipeline combines the Virchow2 foundation
 model with a pixel-wise segmentation decoder to generate five-class tissue
-segmentations and extract quantitative spatial biomarkers from the tumour
+segmentations and extract quantitative spatial biomarkers from the Tumor
 microenvironment (TME).
 
 ## Features
@@ -11,16 +11,16 @@ microenvironment (TME).
 - End-to-end WSI analysis
 - Virchow2-powered semantic segmentation
 - Five tissue classes
-  - Tumour
+  - Tumor
   - Stroma
   - Inflammatory (TILs)
   - Necrosis
   - Others
-- Tumour ROI generation
+- Tumor ROI generation
 - TSR and sTIL scoring
 - Immune proximity analysis
 - Necrosis proximity analysis
-- Tumour morphology analysis
+- Tumor morphology analysis
 
 
 
@@ -314,13 +314,13 @@ Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by t
 | 1 | Tessellation | `vispace.tessellate` | Tile the WSI into 224×224 px patches using Mussel |
 | 2 | Segmentation | `vispace.segmenter` | Run Virchow2 + pixel-wise decoder on every patch |
 | 3 | Stitching | `vispace.stitch` | Merge per-patch masks into a slide-level GeoJSON |
-| 4 | Tumour ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-tumour-content ROI boxes |
-| 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per tumour cluster |
-| 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–tumour boundary distance features |
-| 7 | Necrosis Features | `vispace.necrosis_features` | Necrosis area, perimeter, and phenotype per tumour cluster |
-| 8 | Tumour Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
+| 4 | Tumor ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-Tumor-content ROI boxes |
+| 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per Tumor cluster |
+| 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–Tumor boundary distance features |
+| 7 | Necrosis Features | `vispace.necrosis_features` | Necrosis area, perimeter, and phenotype per Tumor cluster |
+| 8 | Tumor Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
 
-**Segmentation classes:** Tumour · Stroma · Necrosis · Inflammatory (TILs) · Others
+**Segmentation classes:** Tumor · Stroma · Necrosis · Inflammatory (TILs) · Others
 
 **Orchestration & utilities** (not pipeline stages themselves):
 
@@ -592,7 +592,7 @@ Column names below match the actual CSV headers written by each script. Each tab
 
 ### TSR & sTILs (`tils_tsr_by_cluster.csv`)
 
-Scores are computed per Master ROI (a morphology-aware combined tumour
+Scores are computed per Master ROI (a morphology-aware combined Tumor
 ecosystem). `cluster_id` is kept as a backward-compatible alias for
 `master_roi_id`, and this file is written identically to the newer
 `tils_tsr_by_master_roi.csv`.
@@ -601,15 +601,15 @@ ecosystem). `cluster_id` is kept as a backward-compatible alias for
 |--------|-------------|
 | `master_roi_id` / `cluster_id` | Master-ROI identifier (`cluster_id` is a legacy alias) |
 | `tissue_fraction` | Fraction of the ROI polygon with segmentation coverage |
-| `tumor_stroma_ratio` | Tumour area / stroma area |
-| `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` | Tumour % and stroma % within the tumour+stroma compartment |
-| `TSR_stroma_fraction` | Raw TSR value: stroma / (tumour + stroma) |
+| `tumor_stroma_ratio` | Tumor area / stroma area |
+| `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` | Tumor % and stroma % within the Tumor+stroma compartment |
+| `TSR_stroma_fraction` | Raw TSR value: stroma / (Tumor + stroma) |
 | `TSR_category` | `stroma-high` (compartment stroma ≥ 50 %) / `stroma-low` / `indeterminate` |
 | `TSR_reliable` | QC flag: whether the TSR denominator met the minimum-area threshold |
 | `sTIL_pct` | Stromal sTIL % (inflammatory occupancy of the stromal compartment) |
 | `intratumoral_TIL_pct` | Intratumoral TIL % |
-| `inter_tumor_sTILs_pct` | sTIL % measured in inter-tumour corridors |
-| `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the tumour foci merged into the Master ROI |
+| `inter_tumor_sTILs_pct` | sTIL % measured in inter-Tumor corridors |
+| `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the Tumor foci merged into the Master ROI |
 
 Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
 `sTILs_reliable`, `iTILs_reliable`, `inter_tumor_sTILs_reliable`).
@@ -618,9 +618,9 @@ Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
 
 | Column | Description |
 |--------|-------------|
-| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the tumour boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
+| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the Tumor boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
 | `til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
-| `til_fraction_intratumoral` | Fraction of TIL area located inside the tumour |
+| `til_fraction_intratumoral` | Fraction of TIL area located inside the Tumor |
 | `til_extratumoral_distance_aw_median_um` | Area-weighted median distance for extratumoral TILs |
 | `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` |
 
@@ -628,7 +628,7 @@ Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
 
 | Column | Description |
 |--------|-------------|
-| `cluster_id` | Spatial tumour cluster identifier |
+| `cluster_id` | Spatial Tumor cluster identifier |
 | `necrosis_area_um2` | Total necrosis polygon area in the cluster (µm²) |
 | `necrosis_perimeter_um` | Total necrosis polygon perimeter in the cluster (µm) |
 | `necrosis_frac` | Necrosis area / total tissue area in the cluster |
@@ -637,16 +637,16 @@ Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
 
 Necrosis fragments below 500 µm² are treated as segmentation noise and excluded. A WSI-level roll-up (`necrosis_feature_wsi_summary.csv`) reports the area-weighted dominant phenotype and slide totals.
 
-### Tumour Morphology (`tumor_core_features_by_cluster.csv`)
+### Tumor Morphology (`tumor_core_features_by_cluster.csv`)
 
 | Column | Description |
 |--------|-------------|
-| `tumor_area_um2` | Total tumour area in µm² |
+| `tumor_area_um2` | Total Tumor area in µm² |
 | `tumor_solidity_mean` | Area-weighted mean of (island area / island convex-hull area) |
 | `tumor_compactness_mean` | Area-weighted mean of 4π·area / perimeter² per island |
 | `tumor_elongation_mean` | Area-weighted mean major/minor axis ratio |
-| `tumor_n_islands` | Number of disconnected tumour islands (above the min-area filter) |
-| `tumor_largest_patch_index` | Fraction of total tumour area in the single largest island; lower = more fragmented |
+| `tumor_n_islands` | Number of disconnected Tumor islands (above the min-area filter) |
+| `tumor_largest_patch_index` | Fraction of total Tumor area in the single largest island; lower = more fragmented |
 
 ---
 
