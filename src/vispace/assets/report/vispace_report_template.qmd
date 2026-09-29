@@ -531,16 +531,6 @@ IMMUNE_SCALES = [
      "lo":0, "hi":100, "low":"distant", "high":"margin-localized",
      "kind":"pct",
      "meaning":"Area-weighted percentage of inflammatory tissue within 50 µm of the tumour boundary."},
-    {"label":"Inflammatory area within 100 µm",
-     "cols":"wsi_til_pct_within_100um",
-     "lo":0, "hi":100, "low":"distant", "high":"near tumour",
-     "kind":"pct",
-     "meaning":"Area-weighted percentage of inflammatory tissue within 100 µm of the tumour boundary."},
-    {"label":"Inflammatory area within 200 µm",
-     "cols":"wsi_til_pct_within_200um",
-     "lo":0, "hi":100, "low":"distant", "high":"regional proximity",
-     "kind":"pct",
-     "meaning":"Area-weighted percentage of inflammatory tissue within 200 µm of the tumour boundary."},
     {"label":"Median extratumoral distance",
      "cols":"wsi_til_extratumoral_distance_aw_median_um",
      "lo":0, "hi":200, "low":"near tumour", "high":"excluded/distant",
@@ -623,11 +613,6 @@ MORPH_SCALES = [
      "lo":0, "hi":1, "low":"distributed", "high":"one island dominates",
      "kind":"num",
      "meaning":"Fraction of tumour area represented by the largest connected island."},
-    {"label":"Spread fraction",
-     "cols":"wsi_area_weighted_tumor_spread_frac",
-     "lo":0, "hi":1, "low":"localized", "high":"dispersed",
-     "kind":"num",
-     "meaning":"Relative spatial extent of tumour islands across the scoring region."},
 ]
 
 
@@ -1176,8 +1161,9 @@ else:
         "wsi_area_weighted_tumor_boundary_fractal_dimension"
     )[0]
 
-    n_islands = first_value(
-        r, "wsi_tumor_n_islands"
+    median_nnd = first_value(
+        r,
+        "wsi_area_weighted_tumor_island_nnd_median_um"
     )[0]
 
     largest_patch = first_value(
@@ -1222,11 +1208,6 @@ else:
             "vector box-counting estimate",
         ),
         (
-            "Tumour islands",
-            fmt_int(n_islands),
-            "separated tumour components",
-        ),
-        (
             "Largest patch",
             fmt_num(largest_patch),
             "higher = more cohesive",
@@ -1240,6 +1221,11 @@ else:
             "Median island gap",
             f"{fmt_num(median_gap)} µm",
             "median nearest edge-to-edge separation",
+        ),
+        (
+            "Median island spacing",
+            f"{fmt_num(median_nnd)} µm",
+            "median nearest centre-to-centre distance",
         ),
     ])
 ```
@@ -1284,7 +1270,7 @@ show_scales(mor_summary, MORPH_SCALES)
 reference_box("Morphology interpretation guardrails", [
     "Tumour perimeter is reported in mm; boundary density is perimeter divided by tumour area and is reported in mm⁻¹.",
     "Boundary fractal dimension is a vector box-counting estimate of multiscale boundary complexity and is not a histopathological grade.",
-    "Compactness, solidity, largest-patch index, and spread fraction are bounded or near-bounded descriptive geometry measures; elongation starts at 1.",
+    "Compactness, solidity, and largest-patch index are bounded descriptive geometry measures; elongation starts at 1.",
     "Median island gap is the median nearest edge-to-edge distance between retained tumour islands; it is reported in µm. A value is undefined when fewer than two retained islands are present.",
     "Tumour islands below the configured minimum area are excluded from primary morphology calculations."
 ])
@@ -1298,7 +1284,7 @@ reference_box("Morphology interpretation guardrails", [
 # Immune Cell (TIL) Proximity to Tumour
 
 ```{python}
-section_intro("proximity", "Immune spatial relationship to tumour", "Inflammatory regions are quantified relative to tumour boundaries using intratumoral fraction, 5 µm contact, 50/100/200 µm proximity fractions, area-weighted extratumoral distance, and a configurable rule-based phenotype.")
+section_intro("proximity", "Immune spatial relationship to tumour", "Inflammatory regions are quantified relative to tumour boundaries using intratumoral fraction, 5 µm contact, 50 µm proximity fraction (100/200 µm per cluster), area-weighted extratumoral distance, and a configurable rule-based phenotype.")
 ```
 
 ```{python}
@@ -1313,14 +1299,19 @@ show_image(imm_d / "immune_proximity_plot.png", max_width=1800,
 ## Slide summary
 
 ```{python}
-smart_cards(imm_summary, [
+# Slide summary stores TIL area in µm² only; derive mm² for display.
+_imm_cards_df = imm_summary.copy()
+if not _imm_cards_df.empty and "wsi_til_area_total_um2" in _imm_cards_df.columns:
+    _imm_cards_df["_til_area_total_mm2"] = pd.to_numeric(
+        _imm_cards_df["wsi_til_area_total_um2"], errors="coerce"
+    ) / 1e6
+
+smart_cards(_imm_cards_df, [
     (["wsi_dominant_immune_phenotype"], "Dominant phenotype", "rule-based WSI-level phenotype", "str"),
-    (["wsi_til_area_total_mm2"], "Inflammatory area", "total inflammatory area", "mm2"),
+    (["_til_area_total_mm2"], "Inflammatory area", "total inflammatory area", "mm2"),
     (["wsi_til_fraction_intratumoral"], "Intratumoral fraction", "fraction of inflammatory area inside tumour", "pct_frac"),
     (["wsi_til_contact_fraction"], "Contact fraction", "within tumour-contact tolerance", "pct_frac"),
     (["wsi_til_pct_within_50um"], "Within 50 µm", "boundary proximity", "pct"),
-    (["wsi_til_pct_within_100um"], "Within 100 µm", "boundary proximity", "pct"),
-    (["wsi_til_pct_within_200um"], "Within 200 µm", "boundary proximity", "pct"),
     (["wsi_til_extratumoral_distance_aw_median_um"], "Median extra distance", "area-weighted", "um"),
 ])
 ```

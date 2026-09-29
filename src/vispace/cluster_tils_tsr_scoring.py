@@ -2187,28 +2187,24 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     # ---------------------------------------------------------------
     # Minimal output contract.
     #
-    # Three logical outputs are retained:
-    #   1) Master ROI geometry
-    #   2) Per-Master ROI TSR/TIL table
-    #   3) WSI summary
+    # Three outputs are written, each once:
+    #   1) Master ROI geometry   -> cluster_scoring_polygons.geojson
+    #   2) Per-Master TSR/TIL    -> tils_tsr_by_cluster.csv
+    #   3) WSI summary           -> tils_tsr_wsi_summary.csv
     #
-    # The first two are also written under legacy filenames required by
-    # downstream ViSpace stages and run_vispace.py. Therefore five physical
-    # files are written, but only three distinct tabular/vector datasets are
-    # produced; the standard report/QC overlay PNG is retained separately.
+    # The legacy filenames are kept because downstream ViSpace stages,
+    # run_vispace.py and the report read them; the duplicate
+    # master_roi_polygons.geojson / tils_tsr_by_master_roi.csv copies are no
+    # longer written. The report/QC overlay PNG is retained separately.
     # ---------------------------------------------------------------
-    master_geojson = out_dir / "master_roi_polygons.geojson"
-    legacy_cluster_geojson = out_dir / "cluster_scoring_polygons.geojson"
-    master_csv = out_dir / "tils_tsr_by_master_roi.csv"
-    legacy_cluster_csv = out_dir / "tils_tsr_by_cluster.csv"
+    cluster_geojson = out_dir / "cluster_scoring_polygons.geojson"
+    cluster_csv = out_dir / "tils_tsr_by_cluster.csv"
     wsi_csv = out_dir / "tils_tsr_wsi_summary.csv"
     overlay_png = out_dir / "cluster_tils_tsr_overlay.png"
 
     t = time.perf_counter()
 
-    # Same Master-ROI geometry, two filenames.
-    export_master_geojson(masters, master_geojson)
-    export_master_geojson(masters, legacy_cluster_geojson)
+    export_master_geojson(masters, cluster_geojson)
 
     core_scores = select_core_master_features(
         scores,
@@ -2221,9 +2217,8 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
         tsr_stroma_high_threshold_pct=tsr_stroma_high_threshold_pct,
     )
 
-    # Same per-Master table, two filenames.
-    core_scores.to_csv(master_csv, index=False)
-    core_scores.to_csv(legacy_cluster_csv, index=False)
+    # Per-Master ROI table.
+    core_scores.to_csv(cluster_csv, index=False)
 
     # Slide-level summary.
     pd.DataFrame([core_wsi_summary]).to_csv(wsi_csv, index=False)
@@ -2250,20 +2245,19 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     print(f"  Master ROIs               : {len(masters)}")
     print(f"  Inter-tumour ROIs         : {len(inter_rois)}")
     print("  Wrote minimal output contract:")
-    print(f"    {master_geojson.name}")
-    print(f"    {legacy_cluster_geojson.name}  [legacy alias]")
-    print(f"    {master_csv.name}")
-    print(f"    {legacy_cluster_csv.name}  [legacy alias]")
+    print(f"    {cluster_geojson.name}")
+    print(f"    {cluster_csv.name}")
     print(f"    {wsi_csv.name}")
     print(f"    {overlay_png.name}")
 
     return {
         "slide_name": slide,
         "scoring_mode": scoring_mode,
-        "master_geojson": str(master_geojson),
-        "cluster_geojson": str(legacy_cluster_geojson),
-        "master_csv": str(master_csv),
-        "cluster_csv": str(legacy_cluster_csv),
+        # master_* keys kept for callers; they now point at the single copy.
+        "master_geojson": str(cluster_geojson),
+        "cluster_geojson": str(cluster_geojson),
+        "master_csv": str(cluster_csv),
+        "cluster_csv": str(cluster_csv),
         "wsi_csv": str(wsi_csv),
         "overlay_png": str(overlay_png),
         "wsi_summary": core_wsi_summary,

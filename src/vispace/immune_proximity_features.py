@@ -735,7 +735,7 @@ Primary retained features
 
     s = wsi_df.iloc[0]
     print(f"\n  === Immune proximity summary ===")
-    print(f"  Total TIL area:          {s['wsi_til_area_total_mm2']:.3f} mm²")
+    print(f"  Total TIL area:          {s['wsi_til_area_total_um2'] / 1e6:.3f} mm²")
     print(f"  Intratumoral fraction:   {s['wsi_til_fraction_intratumoral']:.3f}")
     print(f"  Median extratumoral dist:{s['wsi_til_extratumoral_distance_aw_median_um']:.1f} µm")
     print(f"  Dominant phenotype:      {s['wsi_dominant_immune_phenotype']}")
