@@ -1490,40 +1490,23 @@ def select_core_wsi_features(
     scores: pd.DataFrame,
     tsr_stroma_high_threshold_pct: float = 50.0,
 ) -> dict:
-    """Keep core science metrics and provide the exact aliases consumed by the QMD."""
-    out = {}
+    """Slide-level output: the five core TSR/TIL metrics, nothing else.
+
+    Tumour/stroma percentages are recoverable from the ratio
+    (stroma % = 100 / (1 + ratio)); topology counts and area live in the
+    per-Master-ROI table. ``scores`` is kept for call compatibility.
+    """
     stroma_pct = summary.get("WSI_TSR_stroma_pct", np.nan)
     tumor_pct = summary.get("WSI_TSR_tumor_pct", np.nan)
     ratio = (float(tumor_pct) / float(stroma_pct)) if np.isfinite(tumor_pct) and np.isfinite(stroma_pct) and float(stroma_pct) > 0 else np.nan
-    n_reliable = int(scores["sTILs_reliable"].fillna(False).astype(bool).sum()) if (scores is not None and not scores.empty and "sTILs_reliable" in scores.columns) else 0
 
-    # Exact names used by the current QMD.
-    out.update({
+    return {
         "WSI_tumor_stroma_ratio": ratio,
         "WSI_TSR_category": classify_tsr_category(stroma_pct, tsr_stroma_high_threshold_pct),
         "WSI_sTIL_pct": summary.get("WSI_sTILs_pct_stromal_occupancy", np.nan),
-        "WSI_neighborhood_sTIL_pct": summary.get("WSI_sTILs_pct_stromal_occupancy", np.nan),
         "WSI_neighborhood_intratumoral_TIL_pct": summary.get("WSI_iTILs_pct_computational", np.nan),
-        "WSI_tumor_pct_TS_compartment": tumor_pct,
-        "WSI_stroma_pct_TS_compartment": stroma_pct,
-        "n_clusters_input": int(summary.get("n_foci", 0)),
-        "n_clusters_scored": int(summary.get("n_master_rois", 0)),
-        "n_clusters_sTIL_reliable": n_reliable,
-        "n_til_neighborhoods": int(summary.get("n_master_rois", 0)),
-    })
-
-    # Important new-architecture fields worth retaining even if the current QMD
-    # does not yet display all of them.
-    for key in [
-        "n_master_rois", "n_foci", "n_intertumor_edges",
-        "WSI_TSR_stroma_fraction", "WSI_TSR_compartment_stroma_fraction",
-        "WSI_sTILs_pct_stromal_occupancy", "WSI_iTILs_pct_computational",
-        "WSI_inter_tumor_sTILs_pct", "mean_master_tissue_fraction",
-        "total_master_area_mm2",
-    ]:
-        if key in summary:
-            out[key] = summary[key]
-    return out
+        "WSI_inter_tumor_sTILs_pct": summary.get("WSI_inter_tumor_sTILs_pct", np.nan),
+    }
 
 
 def select_core_edge_features(edges: pd.DataFrame) -> pd.DataFrame:
