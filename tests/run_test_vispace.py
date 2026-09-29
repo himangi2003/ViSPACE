@@ -4,6 +4,8 @@ tests/run_test_vispace.py
 Standalone smoke test (no pytest). Runs the full ViSPACE pipeline on every
 slide in tests/data/*.tif and reports per-stage status + output checks.
 
+Note: This repository doesnot contain a *.tif or *.svs file, please add one for test in DATA_DIR 
+
     python tests/run_smoke.py                 # DEVICE from cfg default
     VISPACE_DEVICE=cpu python tests/run_smoke.py
 Exit code 0 = all slides/stages passed, 1 = something failed.
