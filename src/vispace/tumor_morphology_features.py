@@ -779,47 +779,52 @@ def select_core_features(features: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.DataFrame:
+    """Slide-level morphology summary, reduced to non-redundant features.
+
+    Dropped as redundant: n_clusters / n_clusters_with_tumor (QC counts),
+    wsi_tumor_perimeter_um (= perimeter_mm * 1000), wsi_tumor_n_islands
+    (= patch_density * cluster_area) and the area-weighted spread fraction
+    (near-constant across slides).
+    """
     total_cl_px2      = float(features["cluster_area_px2"].sum())
     total_tu_px2      = float(features["tumor_area_px2"].sum())
-    total_tu_perim_um = float(features["tumor_perimeter_um"].sum())
-    total_tu_perim_mm = total_tu_perim_um / 1000.0
+    total_tu_perim_mm = float(features["tumor_perimeter_um"].sum()) / 1000.0
     total_tu_mm2      = float(features["tumor_area_mm2"].sum())
     total_cl_mm2      = float(features["cluster_area_mm2"].sum())
 
     out: dict = {
-        "n_clusters":                            int(len(features)),
-        "n_clusters_with_tumor":                 int((features["tumor_area_px2"] > 0).sum()),
+        # Size
         "wsi_cluster_area_mm2":                  total_cl_mm2,
         "wsi_tumor_area_mm2":                    total_tu_mm2,
-        "wsi_tumor_fraction_of_cluster":         safe_div(total_tu_px2, total_cl_px2),
-        "wsi_tumor_perimeter_um":                total_tu_perim_um,
         "wsi_tumor_perimeter_mm":                total_tu_perim_mm,
-        "wsi_tumor_boundary_density_per_mm":      safe_div(
-            total_tu_perim_mm, total_tu_mm2
-        ),
-        "wsi_tumor_n_islands": int(features["tumor_n_islands"].fillna(0).sum()),
-        "wsi_tumor_patch_density_per_mm2": safe_div(
+        # Composition
+        "wsi_tumor_fraction_of_cluster":         safe_div(total_tu_px2, total_cl_px2),
+        # Fragmentation
+        "wsi_tumor_boundary_density_per_mm":     safe_div(total_tu_perim_mm, total_tu_mm2),
+        "wsi_tumor_patch_density_per_mm2":       safe_div(
             float(features["tumor_n_islands"].fillna(0).sum()), total_cl_mm2),
     }
 
+    # Area-weighted fragmentation / shape / spacing. Always emitted (NaN when
+    # there is no tumour) so the summary schema is stable across slides.
     weights = features["tumor_area_mm2"].to_numpy(float)
     valid_w = weights > 0
     for col in [
-        "tumor_boundary_fractal_dimension",
+        "tumor_largest_patch_index",
         "tumor_compactness_mean",
         "tumor_solidity_mean",
         "tumor_elongation_mean",
-        "tumor_largest_patch_index",
+        "tumor_boundary_fractal_dimension",
         "tumor_island_nnd_median_um",
         "tumor_island_gap_median_um",
-        "tumor_spread_frac",
     ]:
+        value = np.nan
         if col in features.columns and valid_w.any():
             vals = features[col].to_numpy(float)
             mask = valid_w & np.isfinite(vals)
-            out[f"wsi_area_weighted_{col}"] = (
-                float(np.average(vals[mask], weights=weights[mask])) if mask.any() else np.nan
-            )
+            if mask.any():
+                value = float(np.average(vals[mask], weights=weights[mask]))
+        out[f"wsi_area_weighted_{col}"] = value
 
     return pd.DataFrame([out])
 
