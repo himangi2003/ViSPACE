@@ -346,31 +346,30 @@ def extract_cluster_features(
 
 
 def compute_wsi_summary(cluster_df: pd.DataFrame, cfg: _ImmuneCfg) -> pd.DataFrame:
-    total_cluster_um2 = float(cluster_df["cluster_area_um2"].sum())
+    """Slide-level immune proximity summary, reduced to non-redundant features.
+
+    Dropped as redundant: n_clusters / total_cluster_area_mm2 (duplicated in
+    the TSR / morphology summaries), the mm² copy of TIL area, intratumoral /
+    extratumoral / contact areas (= fractions x total), the 100/200 µm
+    proximity percentages (nested with 50 µm; 200 µm is near-saturated) and
+    the constant run parameters.
+    """
     total_til_um2     = float(cluster_df["til_area_total_um2"].sum())
     total_intra_um2   = float(cluster_df["til_area_intratumoral_um2"].sum())
-    total_extra_um2   = float(cluster_df["til_area_extratumoral_um2"].sum())
     total_contact_um2 = float(cluster_df["til_contact_area_um2"].sum())
 
     out = {
-        "n_clusters":                             int(len(cluster_df)),
-        "total_cluster_area_mm2":                 total_cluster_um2 / 1e6,
         "wsi_til_area_total_um2":                 total_til_um2,
-        "wsi_til_area_total_mm2":                 total_til_um2 / 1e6,
-        "wsi_til_area_intratumoral_um2":          total_intra_um2,
         "wsi_til_fraction_intratumoral":          safe_div(total_intra_um2, total_til_um2),
-        "wsi_til_area_extratumoral_um2":          total_extra_um2,
-        "wsi_til_contact_area_um2":               total_contact_um2,
         "wsi_til_contact_fraction":               safe_div(total_contact_um2, total_til_um2),
     }
 
-    for t in cfg.proximity_thresholds_um:
-        col = f"til_pct_within_{int(t)}um"
-        if col in cluster_df.columns:
-            area_within = cluster_df[col].fillna(0) / 100.0 * cluster_df["til_area_total_um2"]
-            out[f"wsi_til_pct_within_{int(t)}um"] = 100.0 * safe_div(
-                float(area_within.sum()), total_til_um2
-            )
+    # Only the 50 µm proximity band is kept; emitted as NaN if 50 µm is not
+    # among the configured thresholds so the schema stays stable.
+    out["wsi_til_pct_within_50um"] = np.nan
+    if "til_pct_within_50um" in cluster_df.columns:
+        area_within = cluster_df["til_pct_within_50um"].fillna(0) / 100.0 * cluster_df["til_area_total_um2"]
+        out["wsi_til_pct_within_50um"] = 100.0 * safe_div(float(area_within.sum()), total_til_um2)
 
     valid = cluster_df[cluster_df["til_extratumoral_distance_aw_median_um"].notna()].copy()
     out["wsi_til_extratumoral_distance_aw_median_um"] = (
@@ -386,9 +385,6 @@ def compute_wsi_summary(cluster_df: pd.DataFrame, cfg: _ImmuneCfg) -> pd.DataFra
         out["wsi_dominant_immune_phenotype"] = str(pheno_area.idxmax())
     else:
         out["wsi_dominant_immune_phenotype"] = "NA"
-
-    out["contact_tolerance_um_used"] = cfg.contact_tolerance_um
-    out["proximity_thresholds_um"]   = ";".join(str(int(t)) for t in cfg.proximity_thresholds_um)
 
     return pd.DataFrame([out])
 
