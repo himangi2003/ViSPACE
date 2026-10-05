@@ -550,10 +550,8 @@ cfg.OUT_DIR/
         │   └── tumor_roi_boxes_wsi_thumbnail.png   # only if the WSI file exists on disk
         │
         ├── cluster_tils_tsr_score/
-        │   ├── master_roi_polygons.geojson
-        │   ├── cluster_scoring_polygons.geojson   # legacy alias of the master-ROI polygons
-        │   ├── tils_tsr_by_master_roi.csv
-        │   ├── tils_tsr_by_cluster.csv            # legacy alias of tils_tsr_by_master_roi.csv
+        │   ├── cluster_scoring_polygons.geojson   # Master-ROI polygons
+        │   ├── tils_tsr_by_cluster.csv            # one row per Master ROI
         │   ├── tils_tsr_wsi_summary.csv
         │   └── cluster_tils_tsr_overlay.png
         │
@@ -594,8 +592,8 @@ Column names below match the actual CSV headers written by each script. Each tab
 
 Scores are computed per Master ROI (a morphology-aware combined Tumor
 ecosystem). `cluster_id` is kept as a backward-compatible alias for
-`master_roi_id`, and this file is written identically to the newer
-`tils_tsr_by_master_roi.csv`.
+`master_roi_id`; the matching polygons are in
+`cluster_scoring_polygons.geojson`.
 
 | Column | Description |
 |--------|-------------|
@@ -647,6 +645,50 @@ Necrosis fragments below 500 µm² are treated as segmentation noise and exclude
 | `tumor_elongation_mean` | Area-weighted mean major/minor axis ratio |
 | `tumor_n_islands` | Number of disconnected Tumor islands (above the min-area filter) |
 | `tumor_largest_patch_index` | Fraction of total Tumor area in the single largest island; lower = more fragmented |
+
+### Slide-level summaries (`*_wsi_summary.csv`)
+
+Each stage also writes one row per slide. The TSR, immune proximity and
+morphology summaries are reduced to non-redundant features; values that are
+unit conversions, sums of other columns or constant run parameters are not
+written.
+
+**TSR & sTILs (`tils_tsr_wsi_summary.csv`)**
+
+| Column | Description |
+|--------|-------------|
+| `WSI_tumor_stroma_ratio` | Tumor area / stroma area across all Master ROIs (stroma % = 100 / (1 + ratio)) |
+| `WSI_TSR_category` | `stroma-high` / `stroma-low` |
+| `WSI_sTIL_pct` | Stromal TIL % |
+| `WSI_neighborhood_intratumoral_TIL_pct` | Intratumoral TIL % |
+| `WSI_inter_tumor_sTILs_pct` | Stromal TIL % in inter-Tumor corridors (empty when no corridors pass QC) |
+
+**Immune proximity (`immune_proximity_wsi_summary.csv`)**
+
+| Column | Description |
+|--------|-------------|
+| `wsi_til_area_total_um2` | Total TIL area (µm²) |
+| `wsi_til_fraction_intratumoral` | Fraction of TIL area inside the Tumor |
+| `wsi_til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
+| `wsi_til_pct_within_50um` / `_100um` / `_200um` | % TIL area within 50 / 100 / 200 µm of the Tumor boundary |
+| `wsi_til_extratumoral_distance_aw_median_um` | Area-weighted median distance of extratumoral TILs |
+| `wsi_dominant_immune_phenotype` | Phenotype covering the most TIL area |
+
+**Tumor morphology (`tumor_core_wsi_summary.csv`)**
+
+| Column | Description |
+|--------|-------------|
+| `n_clusters_with_tumor` | Number of analysed clusters containing tumor |
+| `wsi_tumor_n_islands` | Total number of retained tumor islands (above the min-area filter) |
+| `wsi_cluster_area_mm2` / `wsi_tumor_area_mm2` | Analysed cluster area and Tumor area (mm²) |
+| `wsi_tumor_perimeter_mm` | Total Tumor boundary length (mm) |
+| `wsi_tumor_fraction_of_cluster` | Tumor area / cluster area |
+| `wsi_tumor_boundary_density_per_mm` | Tumor perimeter (mm) / Tumor area (mm²) |
+| `wsi_tumor_patch_density_per_mm2` | Tumor islands per mm² of cluster area |
+| `wsi_area_weighted_tumor_largest_patch_index` | Area-weighted largest-patch index |
+| `wsi_area_weighted_tumor_compactness_mean` / `_solidity_mean` / `_elongation_mean` | Area-weighted island shape |
+| `wsi_area_weighted_tumor_boundary_fractal_dimension` | Area-weighted boundary fractal dimension |
+| `wsi_area_weighted_tumor_island_nnd_median_um` / `_island_gap_median_um` | Median island centre-to-centre and edge-to-edge spacing (µm) |
 
 ---
 

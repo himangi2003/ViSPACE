@@ -781,10 +781,9 @@ def select_core_features(features: pd.DataFrame) -> pd.DataFrame:
 def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.DataFrame:
     """Slide-level morphology summary, reduced to non-redundant features.
 
-    Dropped as redundant: n_clusters / n_clusters_with_tumor (QC counts),
-    wsi_tumor_perimeter_um (= perimeter_mm * 1000), wsi_tumor_n_islands
-    (= patch_density * cluster_area) and the area-weighted spread fraction
-    (near-constant across slides).
+    Dropped as redundant: n_clusters (equal to n_clusters_with_tumor),
+    wsi_tumor_perimeter_um (= perimeter_mm * 1000) and the area-weighted
+    spread fraction (near-constant across slides).
     """
     total_cl_px2      = float(features["cluster_area_px2"].sum())
     total_tu_px2      = float(features["tumor_area_px2"].sum())
@@ -793,6 +792,9 @@ def compute_wsi_summary(features: pd.DataFrame, islands: pd.DataFrame) -> pd.Dat
     total_cl_mm2      = float(features["cluster_area_mm2"].sum())
 
     out: dict = {
+        # Counts
+        "n_clusters_with_tumor":                 int((features["tumor_area_px2"] > 0).sum()),
+        "wsi_tumor_n_islands":                   int(features["tumor_n_islands"].fillna(0).sum()),
         # Size
         "wsi_cluster_area_mm2":                  total_cl_mm2,
         "wsi_tumor_area_mm2":                    total_tu_mm2,

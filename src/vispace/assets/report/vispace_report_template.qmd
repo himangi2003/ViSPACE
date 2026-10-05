@@ -531,6 +531,16 @@ IMMUNE_SCALES = [
      "lo":0, "hi":100, "low":"distant", "high":"margin-localized",
      "kind":"pct",
      "meaning":"Area-weighted percentage of inflammatory tissue within 50 µm of the tumour boundary."},
+    {"label":"Inflammatory area within 100 µm",
+     "cols":"wsi_til_pct_within_100um",
+     "lo":0, "hi":100, "low":"distant", "high":"near tumour",
+     "kind":"pct",
+     "meaning":"Area-weighted percentage of inflammatory tissue within 100 µm of the tumour boundary."},
+    {"label":"Inflammatory area within 200 µm",
+     "cols":"wsi_til_pct_within_200um",
+     "lo":0, "hi":100, "low":"distant", "high":"regional proximity",
+     "kind":"pct",
+     "meaning":"Area-weighted percentage of inflammatory tissue within 200 µm of the tumour boundary."},
     {"label":"Median extratumoral distance",
      "cols":"wsi_til_extratumoral_distance_aw_median_um",
      "lo":0, "hi":200, "low":"near tumour", "high":"excluded/distant",
@@ -1166,6 +1176,14 @@ else:
         "wsi_area_weighted_tumor_island_nnd_median_um"
     )[0]
 
+    n_islands = first_value(
+        r, "wsi_tumor_n_islands"
+    )[0]
+
+    n_tumor_clusters = first_value(
+        r, "n_clusters_with_tumor"
+    )[0]
+
     largest_patch = first_value(
         r,
         "wsi_area_weighted_tumor_largest_patch_index"
@@ -1206,6 +1224,16 @@ else:
             "Boundary FD",
             fmt_num(boundary_fd, 3),
             "vector box-counting estimate",
+        ),
+        (
+            "Tumour islands",
+            fmt_int(n_islands),
+            "separated tumour components",
+        ),
+        (
+            "Tumour clusters",
+            fmt_int(n_tumor_clusters),
+            "analysed clusters containing tumour",
         ),
         (
             "Largest patch",
@@ -1284,7 +1312,7 @@ reference_box("Morphology interpretation guardrails", [
 # Immune Cell (TIL) Proximity to Tumour
 
 ```{python}
-section_intro("proximity", "Immune spatial relationship to tumour", "Inflammatory regions are quantified relative to tumour boundaries using intratumoral fraction, 5 µm contact, 50 µm proximity fraction (100/200 µm per cluster), area-weighted extratumoral distance, and a configurable rule-based phenotype.")
+section_intro("proximity", "Immune spatial relationship to tumour", "Inflammatory regions are quantified relative to tumour boundaries using intratumoral fraction, 5 µm contact, 50/100/200 µm proximity fractions, area-weighted extratumoral distance, and a configurable rule-based phenotype.")
 ```
 
 ```{python}
@@ -1312,6 +1340,8 @@ smart_cards(_imm_cards_df, [
     (["wsi_til_fraction_intratumoral"], "Intratumoral fraction", "fraction of inflammatory area inside tumour", "pct_frac"),
     (["wsi_til_contact_fraction"], "Contact fraction", "within tumour-contact tolerance", "pct_frac"),
     (["wsi_til_pct_within_50um"], "Within 50 µm", "boundary proximity", "pct"),
+    (["wsi_til_pct_within_100um"], "Within 100 µm", "boundary proximity", "pct"),
+    (["wsi_til_pct_within_200um"], "Within 200 µm", "boundary proximity", "pct"),
     (["wsi_til_extratumoral_distance_aw_median_um"], "Median extra distance", "area-weighted", "um"),
 ])
 ```
