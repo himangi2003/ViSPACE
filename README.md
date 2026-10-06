@@ -47,7 +47,7 @@ Complete documentation is available in the **ViSPACE User Manual**.
 | Python | 3.11 |
 | GPU | NVIDIA RTX 3080 / RTX 4090 / A5000 |
 | CUDA | 12.1 |
-| RAM | 32–64 GB |
+| RAM | 32–64 GB (depending on you slide size)|
 | VRAM | ≥16 GB |
 | Storage | SSD/NVMe |
 
@@ -694,7 +694,7 @@ written.
 
 ## Citation
 
-If you use Vispace in your research, please cite the associated publication (forthcoming).
+If you use Vispace in your research, please cite the associated publication (forthcoming). This repository is in the submission so we are waiting for the CITATION
 
 ---
 
