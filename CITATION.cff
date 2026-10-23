@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use ViSPACE in your research, please cite it as below."
+title: "ViSPACE: Virchow2 powered Spatial Characterization and feature Extraction Pipeline"
+type: software
+authors:
+  - family-names: Srivastava
+    given-names: Himangi
+    email: himangisrivastava45@gmail.com
+version: 0.1.0
+date-released: 2026-10-23
+license: Apache-2.0
+repository-code: "https://github.com/himangi2003/ViSPACE"
+abstract: >-
+  ViSPACE is an end-to-end computational pathology pipeline for analysing
+  whole-slide images in lung and breast cancer. It combines the Virchow2
+  foundation model with a pixel-wise segmentation decoder to produce
+  five-class tissue segmentations and extract quantitative spatial
+  biomarkers from the tumor microenvironment.
+keywords:
+  - computational pathology
+  - digital pathology
+  - whole-slide imaging
+  - tumor microenvironment
+  - segmentation
+references:
+  - type: article
+    title: "Virchow2: Scaling Self-Supervised Mixed Magnification Models in Pathology"
+    authors:
+      - family-names: Zimmermann
+        given-names: Eric
+      - family-names: Vorontsov
+        given-names: Eugene
+      - family-names: Viret
+        given-names: Julian
+      - family-names: Casson
+        given-names: Adam
+      - name: "others"
+    year: 2024
+    identifiers:
+      - type: other
+        value: "arXiv:2408.00738"
+    url: "https://arxiv.org/abs/2408.00738"

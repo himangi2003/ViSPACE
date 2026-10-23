@@ -694,7 +694,33 @@ written.
 
 ## Citation
 
-If you use Vispace in your research, please cite the associated publication (forthcoming). This repository is in the submission so we are waiting for the CITATION
+If you use ViSPACE in your research, please cite:
+
+```bibtex
+@software{srivastava2026vispace,
+  author  = {Srivastava, Himangi},
+  title   = {{ViSPACE}: Virchow2 powered Spatial Characterization and feature Extraction Pipeline},
+  year    = {2026},
+  version = {0.1.0},
+  url     = {https://github.com/himangi2003/ViSPACE}
+}
+```
+
+The associated manuscript is currently under review; this entry will be
+updated with the publication details once available. Citation metadata is
+also provided in [`CITATION.cff`](CITATION.cff) (GitHub's **"Cite this
+repository"** button).
+
+ViSPACE builds on the Virchow2 foundation model. Please also cite:
+
+```bibtex
+@article{zimmermann2024virchow2,
+  title   = {Virchow2: Scaling Self-Supervised Mixed Magnification Models in Pathology},
+  author  = {Zimmermann, Eric and Vorontsov, Eugene and Viret, Julian and Casson, Adam and others},
+  journal = {arXiv preprint arXiv:2408.00738},
+  year    = {2024}
+}
+```
 
 ---
 
