@@ -5,14 +5,14 @@ cluster_tils_tsr_scoring.py
 
 Clean report-compatible edition: internal calculations stay complete, while saved
 CSVs contain core scientific fields plus columns consumed by the current QMD report.
-Master-ROI construction, inter-tumour corridor generation, TSR, stromal TIL,
-intratumoral TIL, and inter-tumour stromal TIL scoring.
+Master-ROI construction, inter-tumor corridor generation, TSR, stromal TIL,
+intratumoral TIL, and inter-tumor stromal TIL scoring.
 
 This version is designed to sit directly on top of the cleaned
-``tumor_roi_overlay.py`` stage. Tumour foci are treated as biological objects;
-representative square tumour ROIs are retained only as image samples. The
-scorer does not recluster tumour tiles. Corridor-QC-passing focus edges create
-inter-tumour relationships; focus pairs closer than ``INTER_TUMOR_MIN_GAP_UM``
+``tumor_roi_overlay.py`` stage. Tumor foci are treated as biological objects;
+representative square tumor ROIs are retained only as image samples. The
+scorer does not recluster tumor tiles. Corridor-QC-passing focus edges create
+inter-tumor relationships; focus pairs closer than ``INTER_TUMOR_MIN_GAP_UM``
 are directly grouped for Master-ROI connectivity without creating a corridor.
 
 Performance architecture
@@ -20,17 +20,17 @@ Performance architecture
 The default ``fast`` mode uses the manifest tile fractions as a spatial raster:
 Master-ROI scoring and corridor QC are masked NumPy sums, and routing uses a
 local SciPy sparse-graph Dijkstra implementation. Vector geometry is retained
-for tumour foci, Master-ROI/corridor exports, morphology, and interoperability.
+for tumor foci, Master-ROI/corridor exports, morphology, and interoperability.
 Optional ``refine`` mode recomputes final accepted Master-ROI compartments with
 exact Shapely polygon intersections for A/B validation or publication endpoints.
 
 Spatial model
 -------------
-* tumour focus = node
+* tumor focus = node
 * valid focus-to-focus relationship = graph edge
-* inter-tumour corridor = tissue-aware path along an edge
-* Master ROI = one graph-connected local tumour ecosystem
-* tumour ROI = square image sample retained from tumor_roi_overlay.py
+* inter-tumor corridor = tissue-aware path along an edge
+* Master ROI = one graph-connected local tumor ecosystem
+* tumor ROI = square image sample retained from tumor_roi_overlay.py
 
 The public entry point remains ``run_cluster_tils_tsr_score`` for package
 compatibility. Legacy filenames ``cluster_scoring_polygons.geojson`` and
@@ -191,28 +191,21 @@ def load_foci(path: Path) -> pd.DataFrame:
         geom = make_valid(shape(feat["geometry"]))
         if geom is None or geom.is_empty:
             continue
-        fid = props.get("focus_id", props.get("cluster_id"))
+        # Current files use tumor_island_id / centroid_x_px / area_um2;
+        # older outputs used focus_id (or cluster_id) / centroid_x / focus_area_um2.
+        fid = props.get("tumor_island_id", props.get("focus_id", props.get("cluster_id")))
         if fid is None:
-            raise ValueError("tumor_foci.geojson requires focus_id or cluster_id")
+            raise ValueError("tumor_foci.geojson requires tumor_island_id (or focus_id)")
         rp = geom.representative_point()
         rows.append({
             "focus_id": int(fid),
             "geometry": geom,
-            "centroid_x": float(props.get("centroid_x", rp.x)),
-            "centroid_y": float(props.get("centroid_y", rp.y)),
-            "focus_area_px2": float(props.get("focus_area_px2", geom.area)),
-            "focus_area_um2": props.get("focus_area_um2", np.nan),
+            "centroid_x": float(props.get("centroid_x_px", props.get("centroid_x", rp.x))),
+            "centroid_y": float(props.get("centroid_y_px", props.get("centroid_y", rp.y))),
+            "focus_area_px2": float(geom.area),
+            "focus_area_um2": props.get("area_um2", props.get("focus_area_um2", np.nan)),
         })
     return pd.DataFrame(rows).sort_values("focus_id").reset_index(drop=True) if rows else pd.DataFrame()
-
-
-def load_roi_boxes(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    rois = pd.read_csv(path)
-    if "focus_id" not in rois.columns and "cluster_id" in rois.columns:
-        rois["focus_id"] = rois["cluster_id"]
-    return rois
 
 
 def _query_indices(tree: STRtree, geoms: List[BaseGeometry], geom: BaseGeometry) -> List[int]:
@@ -263,7 +256,7 @@ class TileSpatialGrid:
 
     Notes
     -----
-    * ``wx``/``wy`` are treated as tile-centre coordinates, matching the
+    * ``wx``/``wy`` are treated as tile-center coordinates, matching the
       existing ViSpace manifest and ROI logic.
     * The tile area used for masked sums is ``step_x * step_y``. This is exact
       for a non-overlapping lattice and an approximation if upstream tiles
@@ -369,10 +362,10 @@ class TileSpatialGrid:
         return gx0, gx1, gy0, gy1
 
     def geometry_mask(self, geom: BaseGeometry) -> np.ndarray:
-        """Rasterize geometry by tile-centre inclusion.
+        """Rasterize geometry by tile-center inclusion.
 
-        A lattice cell is selected when its tile centre intersects the geometry.
-        This is intentionally a fast, centre-sampled rasterization; partial
+        A lattice cell is selected when its tile center intersects the geometry.
+        This is intentionally a fast, center-sampled rasterization; partial
         boundary-cell coverage is not represented in ``fast`` mode. Exact vector
         boundary areas can be recovered with ``SPATIAL_SCORING_MODE='refine'``.
         """
@@ -397,7 +390,7 @@ class TileSpatialGrid:
 
         The effective corridor width is never allowed to be narrower than one
         tile pitch. This prevents a valid vector/path corridor from disappearing
-        solely because it falls between tile centres.
+        solely because it falls between tile centers.
         """
         out = np.zeros(self.shape, dtype=bool)
         if not path:
@@ -505,12 +498,12 @@ def build_close_focus_merges(
 
     ``INTER_TUMOR_MIN_GAP_UM`` separates two concepts:
 
-    * gap < min_gap: too close to interpret as an inter-tumour stromal corridor;
+    * gap < min_gap: too close to interpret as an inter-tumor stromal corridor;
       directly merge the foci for Master-ROI connectivity.
-    * min_gap <= gap <= max_gap: eligible for routed inter-tumour corridor QC.
+    * min_gap <= gap <= max_gap: eligible for routed inter-tumor corridor QC.
 
     Close merges therefore affect Master-ROI connectivity but do not create an
-    inter-tumour ROI or an inter-tumour TIL denominator.
+    inter-tumor ROI or an inter-tumor TIL denominator.
     """
     if foci.empty or len(foci) < 2 or min_gap_um <= 0:
         return pd.DataFrame(columns=[
@@ -564,7 +557,7 @@ def dijkstra_tissue_path(
 ) -> List[Tuple[int, int]]:
     """Shortest tissue-aware path on a local sparse tile graph.
 
-    Only existing manifest tiles are nodes. Tiles belonging to unrelated tumour
+    Only existing manifest tiles are nodes. Tiles belonging to unrelated tumor
     foci are removed from the graph. Edge weights are physical step length
     multiplied by the destination tile's semantic tissue cost. The local graph
     is solved by SciPy's compiled ``csgraph.dijkstra`` implementation.
@@ -759,7 +752,7 @@ def build_focus_edges_and_corridors(
         gap_px = float(ga.distance(gb))
         gap_um = gap_px * mpp
         # Very-close pairs (gap < min_gap_um) are handled separately as
-        # direct Master-ROI connectivity, not as inter-tumour corridors.
+        # direct Master-ROI connectivity, not as inter-tumor corridors.
         if gap_um < min_gap_um or gap_um > max_gap_um:
             continue
 
@@ -1243,7 +1236,7 @@ def score_master_rois_refine(
         stromal_comp = make_valid(master_geom.difference(tumor_bed))
         corridor_geom = make_valid(unary_union([corridors[eid] for eid in eids])) if eids else Polygon()
         if corridor_geom is not None and not corridor_geom.is_empty:
-            # Inter-tumour immune scoring must exclude the endpoint tumour bed.
+            # Inter-tumor immune scoring must exclude the endpoint tumor bed.
             corridor_geom = make_valid(
                 corridor_geom.intersection(master_geom).difference(tumor_bed)
             )
@@ -1400,7 +1393,7 @@ def classify_tsr_category(stroma_pct: float, threshold_pct: float = 50.0) -> str
     """Descriptive TSR category used by the report.
 
     This is a computational display category, not a validated clinical cut-off.
-    ``stroma-high`` is assigned when stroma percentage in the Tumour+Stroma
+    ``stroma-high`` is assigned when stroma percentage in the Tumor+Stroma
     compartment is >= ``threshold_pct``; otherwise ``stroma-low``. Missing
     values return ``indeterminate``.
     """
@@ -1460,7 +1453,7 @@ def select_core_master_features(
 def make_qmd_combined_clump_table(scores: pd.DataFrame, mpp: float) -> pd.DataFrame:
     """Compatibility table for the current QMD's combined-clump section.
 
-    In the new architecture, a Master ROI is the morphology-aware combined tumour
+    In the new architecture, a Master ROI is the morphology-aware combined tumor
     ecosystem, so each Master ROI becomes one report clump. ``cluster_ids`` is kept
     as the legacy column name and contains the member focus IDs.
     """
@@ -1485,6 +1478,50 @@ def make_qmd_combined_clump_table(scores: pd.DataFrame, mpp: float) -> pd.DataFr
     })
 
 
+# Internal column names -> user-facing names written to the CSVs.
+# Columns mapped to None are dropped (exact duplicates of a kept column).
+TSR_REGION_COLUMN_NAMES = {
+    "master_roi_id":                   "region_id",
+    "cluster_id":                      None,   # copy of master_roi_id
+    "focus_ids":                       "tumor_island_ids",
+    "n_foci":                          "tumor_island_count",
+    "n_intertumor_edges":              "tumor_link_count",
+    "master_area_mm2":                 "region_area_mm2",
+    "tissue_fraction":                 "tissue_coverage_fraction",
+    "tumor_stroma_ratio":              "tsr_tumor_to_stroma_ratio",
+    "tumor_pct_TS_compartment":        "tsr_tumor_pct",
+    "stroma_pct_TS_compartment":       "tsr_stroma_pct",
+    "TSR_category":                    "tsr_category",
+    "TSR_stroma_fraction":             None,   # = tsr_stroma_pct / 100
+    "TSR_compartment_stroma_fraction": "tsr_stroma_fraction_til_adjusted",
+    "TSR_reliable":                    "qc_tsr_ok",
+    "sTIL_pct":                        "til_stromal_pct",
+    "sTILs_reliable":                  "qc_til_stromal_ok",
+    "intratumoral_TIL_pct":            "til_intratumoral_pct",
+    "iTILs_reliable":                  "qc_til_intratumoral_ok",
+    "inter_tumor_sTILs_pct":           "til_between_tumor_pct",
+    "inter_tumor_sTILs_reliable":      "qc_til_between_tumor_ok",
+    "mean_focus_gap_um":               "tumor_island_gap_mean_um",
+    "median_focus_gap_um":             "tumor_island_gap_median_um",
+    "max_focus_gap_um":                "tumor_island_gap_max_um",
+}
+
+TSR_SUMMARY_COLUMN_NAMES = {
+    "WSI_tumor_stroma_ratio":                "tsr_tumor_to_stroma_ratio",
+    "WSI_TSR_category":                      "tsr_category",
+    "WSI_sTIL_pct":                          "til_stromal_pct",
+    "WSI_neighborhood_intratumoral_TIL_pct": "til_intratumoral_pct",
+    "WSI_inter_tumor_sTILs_pct":             "til_between_tumor_pct",
+}
+
+
+def rename_for_export(df: pd.DataFrame, names: Dict[str, Optional[str]]) -> pd.DataFrame:
+    """Drop columns mapped to None and rename the rest to user-facing names."""
+    drop = [c for c, new in names.items() if new is None and c in df.columns]
+    keep = {c: new for c, new in names.items() if new is not None}
+    return df.drop(columns=drop).rename(columns=keep)
+
+
 def select_core_wsi_features(
     summary: dict,
     scores: pd.DataFrame,
@@ -1492,7 +1529,7 @@ def select_core_wsi_features(
 ) -> dict:
     """Slide-level output: the five core TSR/TIL metrics, nothing else.
 
-    Tumour/stroma percentages are recoverable from the ratio
+    Tumor/stroma percentages are recoverable from the ratio
     (stroma % = 100 / (1 + ratio)); topology counts and area live in the
     per-Master-ROI table. ``scores`` is kept for call compatibility.
     """
@@ -1642,14 +1679,14 @@ def plot_cluster_overlay(
     """Create the report-style ``cluster_tils_tsr_overlay.png``.
 
     The layout intentionally mirrors the earlier ViSpace TSR/sTIL overlay:
-    a tissue map on the left, sTIL-coloured scoring-region outlines and C# labels,
+    a tissue map on the left, sTIL-colored scoring-region outlines and C# labels,
     plus a compact per-region score panel on the right.
 
     Performance note
     ----------------
     The background is rendered from the already-built manifest tile raster using
     the dominant semantic class per tile. Quantitative scoring remains fractional
-    (sum of ``frac_*`` values); the winner-take-all colouring is visualization only.
+    (sum of ``frac_*`` values); the winner-take-all coloring is visualization only.
     This avoids loading the large semantic GeoJSON merely to draw the report PNG.
     """
     fig = plt.figure(figsize=(20, 13))
@@ -1764,9 +1801,9 @@ def plot_cluster_overlay(
     ax.set_ylabel("WSI y (px)", fontsize=10)
     ax.set_title(
         "Master ROI scoring polygons — TSR & spatial TILs\n"
-        "TSR = Tumour%/Stroma%; sTIL = stromal inflammatory occupancy; "
+        "TSR = Tumor%/Stroma%; sTIL = stromal inflammatory occupancy; "
         "iTIL = computational intratumoral occupancy\n"
-        "Tissue colours use dominant manifest class for display; quantitative scoring uses fractional tile sums",
+        "Tissue colors use dominant manifest class for display; quantitative scoring uses fractional tile sums",
         fontsize=9,
     )
 
@@ -1795,10 +1832,10 @@ def plot_cluster_overlay(
     ax_panel.text(0.02, 0.990, "Master ROI scores", fontsize=13, weight="bold", va="top")
     ax_panel.text(
         0.02, 0.955,
-        "TSR = Tumour% / Stroma%\n"
+        "TSR = Tumor% / Stroma%\n"
         "sTIL = stromal inflammatory occupancy\n"
         "iTIL = computational intratumoral occupancy\n"
-        "Inter-TIL = accepted inter-tumour corridor occupancy",
+        "Inter-TIL = accepted inter-tumor corridor occupancy",
         fontsize=7.5, va="top", color="#444444",
     )
 
@@ -1911,7 +1948,6 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     out_dir = base / "spatial_feature_results" / "cluster_tils_tsr_score"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    roi_csv = roi_dir / "tumor_roi_boxes.csv"
     foci_geojson = roi_dir / "tumor_foci.geojson"
     focus_tiles_csv = roi_dir / "tumor_focus_tiles.csv"
     geojson = base / "segmentation" / "segmentation_all_classes.geojson"
@@ -1953,7 +1989,7 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     corridor_min_tissue = float(getattr(cfg, "INTER_CORRIDOR_MIN_TISSUE_FRACTION", 0.50))
     corridor_min_efficiency = float(getattr(cfg, "INTER_CORRIDOR_MIN_PATH_EFFICIENCY", 0.50))
 
-    # Representative inter-tumour ROI sampling
+    # Representative inter-tumor ROI sampling
     inter_roi_size_um = float(getattr(cfg, "INTER_TUMOR_ROI_SIZE_UM", getattr(cfg, "ROI_SIZE_UM", 200.0)))
     sample_fractions = _parse_sample_fractions(getattr(cfg, "INTER_TUMOR_SAMPLE_FRACTIONS", (0.5,)))
     inter_max_tumor = float(getattr(cfg, "INTER_TUMOR_MAX_TUMOR_FRAC", 0.20))
@@ -1973,12 +2009,13 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     t = time.perf_counter()
     foci = load_foci(foci_geojson)
     focus_tiles = pd.read_csv(focus_tiles_csv)
+    if "tumor_island_id" in focus_tiles.columns:  # current ROI-stage name
+        focus_tiles = focus_tiles.rename(columns={"tumor_island_id": "focus_id"})
     manifest = pd.read_csv(manifest_csv)
-    tumor_rois = load_roi_boxes(roi_csv)
     stage_times["load_core_inputs_s"] = time.perf_counter() - t
 
     if foci.empty:
-        raise RuntimeError("No tumour foci available for scoring")
+        raise RuntimeError("No tumor foci available for scoring")
 
     t = time.perf_counter()
     grid = TileSpatialGrid(manifest, mpp=mpp, max_cells=max_grid_cells)
@@ -2007,10 +2044,10 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     )
     stage_times["focus_graph_dijkstra_s"] = time.perf_counter() - t
 
-    # Foci separated by less than the minimum inter-tumour gap are too close
+    # Foci separated by less than the minimum inter-tumor gap are too close
     # to define a meaningful stromal corridor, but they should still belong to
     # the same Master ROI. Keep those direct merges separate from true
-    # inter-tumour corridor edges.
+    # inter-tumor corridor edges.
     close_merges = build_close_focus_merges(
         foci, mpp=mpp, min_gap_um=min_gap_um, knn_k=knn_k
     )
@@ -2052,7 +2089,7 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
             " Foci will otherwise be scored as separate Master ROIs."
         )
         warnings.warn(
-            "All routed inter-tumour edges were rejected by corridor QC." + suffix,
+            "All routed inter-tumor edges were rejected by corridor QC." + suffix,
             RuntimeWarning,
         )
 
@@ -2089,7 +2126,7 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
     masters = make_nonoverlapping_master_rois(masters)
     stage_times["master_roi_vector_build_s"] = time.perf_counter() - t
 
-    # Representative inter-tumour image samples use the same tile raster.
+    # Representative inter-tumor image samples use the same tile raster.
     t = time.perf_counter()
     inter_rois = build_inter_tumor_rois(
         edges,
@@ -2106,8 +2143,8 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
 
     if not edges.empty and inter_rois.empty:
         warnings.warn(
-            "Valid focus edges exist, but no representative inter-tumour ROI passed "
-            "the tumour/necrosis window filters. Master-ROI scoring still proceeds.",
+            "Valid focus edges exist, but no representative inter-tumor ROI passed "
+            "the tumor/necrosis window filters. Master-ROI scoring still proceeds.",
             RuntimeWarning,
         )
 
@@ -2217,11 +2254,15 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
         tsr_stroma_high_threshold_pct=tsr_stroma_high_threshold_pct,
     )
 
-    # Per-Master ROI table.
-    core_scores.to_csv(cluster_csv, index=False)
+    # Per-Master ROI table (user-facing column names; the overlay below still
+    # uses the internal names in core_scores).
+    rename_for_export(core_scores, TSR_REGION_COLUMN_NAMES).to_csv(cluster_csv, index=False)
 
     # Slide-level summary.
-    pd.DataFrame([core_wsi_summary]).to_csv(wsi_csv, index=False)
+    export_wsi_summary = {
+        TSR_SUMMARY_COLUMN_NAMES.get(k, k): v for k, v in core_wsi_summary.items()
+    }
+    pd.DataFrame([export_wsi_summary]).to_csv(wsi_csv, index=False)
 
     # Standard report/QC overlay retained for the QMD.
     # The visual style mirrors the older cluster overlay while using the fast
@@ -2238,12 +2279,12 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
 
     print(f"  Spatial scoring mode      : {scoring_mode}")
     print(f"  Tile grid                 : {grid.nx} x {grid.ny} ({grid.n_cells:,} cells)")
-    print(f"  Tumour foci               : {len(foci)}")
+    print(f"  Tumor foci               : {len(foci)}")
     print(f"  Candidate inter-edges     : {len(all_edges)}")
-    print(f"  Valid inter-tumour edges  : {len(edges)}")
+    print(f"  Valid inter-tumor edges  : {len(edges)}")
     print(f"  Close-focus merges        : {len(close_merges)}")
     print(f"  Master ROIs               : {len(masters)}")
-    print(f"  Inter-tumour ROIs         : {len(inter_rois)}")
+    print(f"  Inter-tumor ROIs         : {len(inter_rois)}")
     print("  Wrote minimal output contract:")
     print(f"    {cluster_geojson.name}")
     print(f"    {cluster_csv.name}")
@@ -2260,7 +2301,7 @@ def run_cluster_tils_tsr_score(wsi_path: str, cfg: PipelineConfig = None) -> dic
         "cluster_csv": str(cluster_csv),
         "wsi_csv": str(wsi_csv),
         "overlay_png": str(overlay_png),
-        "wsi_summary": core_wsi_summary,
+        "wsi_summary": export_wsi_summary,
     }
 
 

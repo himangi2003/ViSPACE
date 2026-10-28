@@ -2,9 +2,15 @@
 """
 necrosis_features.py
 ====================
-Necrosis feature extraction per tumour cluster from ViSpace GeoJSON output.
+Necrosis feature extraction per tumor region from ViSpace GeoJSON output.
 
-Features produced (per cluster)
+Regions are the Master ROI polygons written by the TSR/TIL stage
+(cluster_scoring_polygons.geojson), so necrosis is measured over the same
+regions, with the same region IDs, as the TSR, immune-proximity and
+morphology stages. Necrosis is scored over the whole region, not over the
+representative image ROIs (which are chosen to avoid necrosis).
+
+Features produced (per region)
 -------------------------------
 - necrosis_area_um2       : total necrosis polygon area in µm²
 - necrosis_perimeter_um   : total necrosis polygon perimeter in µm
@@ -29,7 +35,7 @@ using the slide MPP; no pixel² values are written to the output.
 Outputs
 -------
 cfg.OUT_DIR/<slide>/spatial_feature_results/necrosis_feature/
-    necrosis_feature_by_cluster.csv   one row per tumour cluster
+    necrosis_feature_by_cluster.csv   one row per tumor cluster
     necrosis_feature_wsi_summary.csv  one WSI-level summary row
     necrosis_summary_figure.png       area / perimeter / phenotype figure
 
@@ -38,6 +44,8 @@ Pipeline position
     tessellate.py → segmenter.py → stitch.py → tumor_roi_overlay.py
         → cluster_tils_tsr_score.py → immune_proximity_features.py
         → necrosis_features.py → tumor_morphology_features.py
+
+    Requires cluster_tils_tsr_score.py output (cluster_scoring_polygons.geojson).
 
 Usage (as a library)
 --------------------
@@ -70,6 +78,8 @@ from pathlib import Path
 
 import pandas as pd
 from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.geometry.base import BaseGeometry
+from shapely.strtree import STRtree
 
 from .config import cfg as default_cfg, PipelineConfig
 
@@ -79,7 +89,7 @@ from .config import cfg as default_cfg, PipelineConfig
 # ---------------------------------------------------------------------------
 
 NECROSIS_CLASS = "Necrosis"
-TUMOUR_CLASS = "Tumour"
+TUMOR_CLASS = "Tumour"
 STROMA_CLASS = "Stroma"
 INFLAM_CLASS = "Inflammatory"
 OTHERS_CLASS = "Others"
@@ -122,7 +132,7 @@ def _load_polygons_by_class(
         classification = props.get("classification") or {}
         cls = classification.get("name") or props.get("class")
 
-        # Normalise tumour spelling if needed.
+        # Normalize tumor spelling if needed.
         if cls in {"Tumor", "tumor", "tumour"}:
             cls = "Tumour"
 
@@ -152,28 +162,42 @@ def _load_polygons_by_class(
 # Main feature extraction
 # ---------------------------------------------------------------------------
 
+def load_region_polygons(path: str | Path) -> dict[int, BaseGeometry]:
+    """Load Master ROI polygons (cluster_scoring_polygons.geojson) keyed by region ID."""
+    with open(path, encoding="utf-8") as f:
+        gj = json.load(f)
+    regions: dict[int, BaseGeometry] = {}
+    for i, feat in enumerate(gj.get("features", [])):
+        props = feat.get("properties", {}) or {}
+        rid = props.get("master_roi_id", props.get("cluster_id", i))
+        geom = shape(feat["geometry"])
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if geom.is_empty:
+            continue
+        regions[int(rid)] = geom
+    return regions
+
+
 def extract_necrosis_features(
     geojson_path: str | Path,
-    cluster_roi_boxes: list[dict],
+    regions: dict[int, BaseGeometry],
     mpp: float,
     focal_threshold: float = FOCAL_THRESHOLD,
     min_fragment_um2: float = MIN_FRAGMENT_UM2,
 ) -> pd.DataFrame:
     """
-    Extract necrosis features per tumour cluster.
+    Extract necrosis features per tumor cluster.
 
     Parameters
     ----------
     geojson_path
         Path to segmentation_all_classes.geojson.
 
-    cluster_roi_boxes
-        List of dictionaries containing:
-            cluster_id, minx, miny, maxx, maxy
-
-        Typically produced by tumor_roi_overlay. A single cluster may be
-        represented by several non-overlapping ROI boxes (rows sharing a
-        cluster_id); they are unioned and scored once per cluster.
+    regions
+        Region ID -> region polygon (level-0 pixels), normally the Master ROI
+        polygons from cluster_scoring_polygons.geojson. Each region is
+        scored once over its full area.
 
     mpp
         Microns per pixel for the slide.
@@ -187,7 +211,7 @@ def extract_necrosis_features(
     Returns
     -------
     pd.DataFrame
-        One row per cluster with columns:
+        One row per region with columns (``cluster_id`` holds the region ID):
 
         cluster_id
         necrosis_area_um2
@@ -196,9 +220,6 @@ def extract_necrosis_features(
         necrosis_phenotype
         tissue_area_um2
     """
-    from shapely.geometry import box as shapely_box
-    from shapely.ops import unary_union
-
     geojson_path = Path(geojson_path)
 
     if not geojson_path.exists():
@@ -212,7 +233,7 @@ def extract_necrosis_features(
 
     # Load all tissue-class polygons once.
     necrosis_polys = _load_polygons_by_class(geojson_path, NECROSIS_CLASS)
-    tumour_polys = _load_polygons_by_class(geojson_path, TUMOUR_CLASS)
+    tumor_polys = _load_polygons_by_class(geojson_path, TUMOR_CLASS)
     stroma_polys = _load_polygons_by_class(geojson_path, STROMA_CLASS)
     inflam_polys = _load_polygons_by_class(geojson_path, INFLAM_CLASS)
     others_polys = _load_polygons_by_class(geojson_path, OTHERS_CLASS)
@@ -225,50 +246,34 @@ def extract_necrosis_features(
 
     all_tissue_polys = (
         necrosis_polys
-        + tumour_polys
+        + tumor_polys
         + stroma_polys
         + inflam_polys
         + others_polys
     )
 
-    # A single tumour cluster is tiled by one or more non-overlapping ROI
-    # boxes in tumor_roi_boxes.csv, so group the boxes by cluster_id and
-    # score each cluster once. Unioning a cluster's boxes into a single
-    # region (rather than looping box-by-box) both collapses the output to
-    # one row per cluster and avoids double-counting necrosis perimeter
-    # along shared internal box edges.
-    boxes_by_cluster: dict = {}
-    for roi in cluster_roi_boxes:
-        boxes_by_cluster.setdefault(roi["cluster_id"], []).append(
-            shapely_box(
-                roi["minx"],
-                roi["miny"],
-                roi["maxx"],
-                roi["maxy"],
-            )
-        )
+    # Spatial indexes so each region only tests nearby polygons.
+    necro_tree = STRtree(necrosis_polys) if necrosis_polys else None
+    tissue_tree = STRtree(all_tissue_polys) if all_tissue_polys else None
+
+    def _clip(tree, polys, region):
+        if tree is None:
+            return []
+        out = []
+        for i in tree.query(region):
+            p = polys[int(i)]
+            if p.intersects(region):
+                q = p.intersection(region)
+                if not q.is_empty:
+                    out.append(q)
+        return out
 
     rows = []
 
-    for cid, cluster_boxes in boxes_by_cluster.items():
-        roi_region = unary_union(cluster_boxes)
-
-        # Necrosis intersecting this cluster region.
-        necro_in_roi = [
-            p.intersection(roi_region)
-            for p in necrosis_polys
-            if p.intersects(roi_region)
-        ]
-        necro_in_roi = [p for p in necro_in_roi if not p.is_empty]
-
-        # Total tissue area in cluster.
-        tissue_in_roi = [
-            p.intersection(roi_region)
-            for p in all_tissue_polys
-            if p.intersects(roi_region)
-        ]
-        tissue_in_roi = [p for p in tissue_in_roi if not p.is_empty]
-
+    for cid, roi_region in regions.items():
+        # Necrosis and tissue inside this region.
+        necro_in_roi = _clip(necro_tree, necrosis_polys, roi_region)
+        tissue_in_roi = _clip(tissue_tree, all_tissue_polys, roi_region)
         tissue_area_px2 = sum(p.area for p in tissue_in_roi)
 
         # Aggregate necrosis measurements.
@@ -310,10 +315,47 @@ def extract_necrosis_features(
 
 
 # ---------------------------------------------------------------------------
+# User-facing CSV column names
+# ---------------------------------------------------------------------------
+
+# Internal column names -> names written to the CSVs. µm² areas and µm
+# lengths are converted to mm² / mm on export.
+NECROSIS_REGION_COLUMN_NAMES = {
+    "cluster_id":            "region_id",
+    "necrosis_area_um2":     "necrosis_area_mm2",
+    "necrosis_perimeter_um": "necrosis_boundary_length_mm",
+    "necrosis_frac":         "necrosis_tissue_fraction",
+    "necrosis_phenotype":    "necrosis_category",
+    "tissue_area_um2":       "tissue_area_mm2",
+}
+
+NECROSIS_SUMMARY_COLUMN_NAMES = {
+    "wsi_n_clusters_scored":            "region_count",
+    "wsi_necrosis_area_um2":            "necrosis_area_mm2",
+    "wsi_necrosis_perimeter_um":        "necrosis_boundary_length_mm",
+    "wsi_necrosis_fraction_of_cluster": "necrosis_tissue_fraction",
+    "wsi_dominant_necrosis_phenotype":  "necrosis_category",
+}
+
+_UM2_TO_MM2 = {"necrosis_area_um2", "tissue_area_um2", "wsi_necrosis_area_um2"}
+_UM_TO_MM = {"necrosis_perimeter_um", "wsi_necrosis_perimeter_um"}
+
+
+def rename_for_export(df: pd.DataFrame, names: dict) -> pd.DataFrame:
+    """Convert µm² / µm to mm² / mm and apply the user-facing column names."""
+    d = df.copy()
+    for c in _UM2_TO_MM2 & set(d.columns):
+        d[c] = pd.to_numeric(d[c], errors="coerce") / 1e6
+    for c in _UM_TO_MM & set(d.columns):
+        d[c] = pd.to_numeric(d[c], errors="coerce") / 1e3
+    return d.rename(columns=names)
+
+
+# ---------------------------------------------------------------------------
 # WSI-level summary
 # ---------------------------------------------------------------------------
 
-def summarise_necrosis_wsi(
+def summarize_necrosis_wsi(
     cluster_df: pd.DataFrame,
     focal_threshold: float = FOCAL_THRESHOLD,
 ) -> pd.DataFrame:
@@ -405,7 +447,7 @@ def plot_necrosis_summary(
     if cluster_df.empty:
         for ax in axes:
             ax.text(
-                0.5, 0.5, "No clusters scored",
+                0.5, 0.5, "No regions scored",
                 ha="center", va="center", transform=ax.transAxes,
             )
             ax.set_xticks([])
@@ -424,14 +466,14 @@ def plot_necrosis_summary(
 
     # Panel 1: necrosis area per cluster.
     axes[0].bar(cids, df["necrosis_area_um2"], color=bar_colors)
-    axes[0].set_title("Necrosis area per cluster")
-    axes[0].set_xlabel("cluster_id")
+    axes[0].set_title("Necrosis area per region")
+    axes[0].set_xlabel("region_id")
     axes[0].set_ylabel("area (µm²)")
 
     # Panel 2: necrosis perimeter per cluster.
     axes[1].bar(cids, df["necrosis_perimeter_um"], color=bar_colors)
-    axes[1].set_title("Necrosis perimeter per cluster")
-    axes[1].set_xlabel("cluster_id")
+    axes[1].set_title("Necrosis perimeter per region")
+    axes[1].set_xlabel("region_id")
     axes[1].set_ylabel("perimeter (µm)")
 
     # Panel 3: phenotype distribution.
@@ -445,9 +487,9 @@ def plot_necrosis_summary(
         counts.values,
         color=[_PHENOTYPE_COLORS[p] for p in _PHENOTYPE_ORDER],
     )
-    axes[2].set_title("Phenotype distribution")
-    axes[2].set_xlabel("phenotype")
-    axes[2].set_ylabel("number of clusters")
+    axes[2].set_title("Necrosis category")
+    axes[2].set_xlabel("category")
+    axes[2].set_ylabel("number of regions")
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
@@ -460,34 +502,31 @@ def plot_necrosis_summary(
 # CSV-level convenience wrapper
 # ---------------------------------------------------------------------------
 
-def extract_necrosis_features_from_csv(
+def extract_necrosis_features_from_regions(
     geojson_path: str | Path,
-    roi_csv_path: str | Path,
+    regions_geojson_path: str | Path,
     mpp: float,
     out_csv: str | Path | None = None,
     focal_threshold: float = FOCAL_THRESHOLD,
     min_fragment_um2: float = MIN_FRAGMENT_UM2,
 ) -> pd.DataFrame:
     """
-    Load cluster ROI boxes from CSV and compute necrosis features.
+    Load region polygons and compute necrosis features per region.
 
     Parameters
     ----------
     geojson_path
         segmentation_all_classes.geojson
 
-    roi_csv_path
-        CSV containing one row per ROI box:
-            cluster_id, {x_min|minx}, {y_min|miny}, {x_max|maxx}, {y_max|maxy}
-
-        This is tumor_roi_overlay's tumor_roi_boxes.csv, which uses the
-        x_min/x_max spelling; the minx/maxx spelling is also accepted.
+    regions_geojson_path
+        cluster_scoring_polygons.geojson from the TSR/TIL stage (one Master
+        ROI polygon per region).
 
     mpp
         Microns per pixel.
 
     out_csv
-        Optional output CSV path for the per-cluster table.
+        Optional output CSV path for the per-region table.
 
     focal_threshold
         Fraction separating focal from present.
@@ -495,42 +534,16 @@ def extract_necrosis_features_from_csv(
     min_fragment_um2
         Necrosis noise floor (µm²).
     """
-    roi_csv_path = Path(roi_csv_path)
+    regions_geojson_path = Path(regions_geojson_path)
 
-    if not roi_csv_path.exists():
-        raise FileNotFoundError(f"ROI CSV not found: {roi_csv_path}")
+    if not regions_geojson_path.exists():
+        raise FileNotFoundError(f"Region polygons not found: {regions_geojson_path}")
 
-    roi_df = pd.read_csv(roi_csv_path)
-
-    # tumor_roi_overlay.py writes bounding-box columns as
-    # x_min/y_min/x_max/y_max; the geometry code expects
-    # minx/miny/maxx/maxy. Accept either spelling and normalise.
-    column_aliases = {
-        "x_min": "minx",
-        "y_min": "miny",
-        "x_max": "maxx",
-        "y_max": "maxy",
-    }
-    roi_df = roi_df.rename(
-        columns={
-            src: dst
-            for src, dst in column_aliases.items()
-            if src in roi_df.columns and dst not in roi_df.columns
-        }
-    )
-
-    required = {"cluster_id", "minx", "miny", "maxx", "maxy"}
-    missing = required - set(roi_df.columns)
-    if missing:
-        raise ValueError(
-            f"ROI CSV missing required columns: {sorted(missing)}"
-        )
-
-    cluster_rois = roi_df[list(required)].to_dict("records")
+    regions = load_region_polygons(regions_geojson_path)
 
     df = extract_necrosis_features(
         geojson_path=geojson_path,
-        cluster_roi_boxes=cluster_rois,
+        regions=regions,
         mpp=mpp,
         focal_threshold=focal_threshold,
         min_fragment_um2=min_fragment_um2,
@@ -539,7 +552,7 @@ def extract_necrosis_features_from_csv(
     if out_csv is not None:
         out_csv = Path(out_csv)
         out_csv.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(out_csv, index=False)
+        rename_for_export(df, NECROSIS_REGION_COLUMN_NAMES).to_csv(out_csv, index=False)
         print(f"  Wrote: {out_csv.name}")
 
     return df
@@ -561,8 +574,8 @@ def run_necrosis_features(
     cfg.OUT_DIR/<slide>/segmentation/
         segmentation_all_classes.geojson
 
-    cfg.OUT_DIR/<slide>/spatial_feature_results/tumor_roi_overlay/
-        tumor_roi_boxes.csv
+    cfg.OUT_DIR/<slide>/spatial_feature_results/cluster_tils_tsr_score/
+        cluster_scoring_polygons.geojson
 
     Writes
     ------
@@ -604,12 +617,12 @@ def run_necrosis_features(
         / "segmentation_all_classes.geojson"
     )
 
-    roi_csv = (
+    regions_geojson = (
         Path(cfg.OUT_DIR)
         / slide_name
         / "spatial_feature_results"
-        / "tumor_roi_overlay"
-        / "tumor_roi_boxes.csv"
+        / "cluster_tils_tsr_score"
+        / "cluster_scoring_polygons.geojson"
     )
 
     out_dir = (
@@ -630,11 +643,11 @@ def run_necrosis_features(
             f"Run run_stitching(wsi_path, cfg) first."
         )
 
-    if not roi_csv.exists():
+    if not regions_geojson.exists():
         raise FileNotFoundError(
-            f"Tumour cluster ROI CSV not found: "
-            f"{roi_csv}\n"
-            f"Run tumor_roi_overlay.py for this slide first."
+            f"Region polygons not found: "
+            f"{regions_geojson}\n"
+            f"Run cluster_tils_tsr_score for this slide first."
         )
 
     mpp = getattr(cfg, "MPP", 0.25)
@@ -652,16 +665,16 @@ def run_necrosis_features(
     print("  Necrosis features")
     print(f"  Slide       : {slide_name}")
     print(f"  Segmentation: {segmentation_geojson.name}")
-    print(f"  Cluster ROI : {roi_csv.name}")
+    print(f"  Regions     : {regions_geojson.name}")
     print(f"  MPP         : {mpp}")
     print(f"  Focal cutoff: {focal_threshold:.3f}")
     print(f"  Noise floor : {min_fragment_um2:.0f} µm²")
     print(f"  Output      : {out_dir}")
     print(f"{'=' * 55}")
 
-    df = extract_necrosis_features_from_csv(
+    df = extract_necrosis_features_from_regions(
         geojson_path=segmentation_geojson,
-        roi_csv_path=roi_csv,
+        regions_geojson_path=regions_geojson,
         mpp=mpp,
         out_csv=out_csv,
         focal_threshold=focal_threshold,
@@ -669,8 +682,8 @@ def run_necrosis_features(
     )
 
     # WSI-level summary.
-    summary_df = summarise_necrosis_wsi(df, focal_threshold=focal_threshold)
-    summary_df.to_csv(summary_csv, index=False)
+    summary_df = summarize_necrosis_wsi(df, focal_threshold=focal_threshold)
+    rename_for_export(summary_df, NECROSIS_SUMMARY_COLUMN_NAMES).to_csv(summary_csv, index=False)
     print(f"  Wrote: {summary_csv.name}")
 
     # Figure.
@@ -689,7 +702,7 @@ def run_necrosis_features(
         total_necrosis_um2 = 0.0
 
     print("\n  === Necrosis summary ===")
-    print(f"  Clusters:              {n_clusters}")
+    print(f"  Regions:               {n_clusters}")
     print(f"  Absent:                {n_absent}")
     print(f"  Focal:                 {n_focal}")
     print(f"  Present:               {n_present}")
@@ -702,7 +715,7 @@ def run_necrosis_features(
     return {
         "slide_name": str(slide_name),
         "segmentation_geojson": str(segmentation_geojson),
-        "roi_csv": str(roi_csv),
+        "regions_geojson": str(regions_geojson),
         "cluster_csv": str(out_csv),
         "wsi_csv": str(summary_csv),
         "figure_png": str(figure_png),
@@ -739,18 +752,19 @@ def main(argv=None) -> None:
         )
 
     slide_name = Path(cfg.WSI_PATH).stem
-    roi_csv = (
+    regions_geojson = (
         Path(cfg.OUT_DIR) / slide_name
-        / "spatial_feature_results" / "tumor_roi_overlay" / "tumor_roi_boxes.csv"
+        / "spatial_feature_results" / "cluster_tils_tsr_score"
+        / "cluster_scoring_polygons.geojson"
     )
     seg_geojson = (
         Path(cfg.OUT_DIR) / slide_name
         / "segmentation" / "segmentation_all_classes.geojson"
     )
-    if not roi_csv.exists():
+    if not regions_geojson.exists():
         raise SystemExit(
-            f"Tumour cluster ROI CSV not found: {roi_csv}. "
-            f"Run tumor_roi_overlay.py for this slide (with the same --out-dir) first."
+            f"Region polygons not found: {regions_geojson}. "
+            f"Run cluster_tils_tsr_score for this slide (with the same --out-dir) first."
         )
     if not seg_geojson.exists():
         raise SystemExit(

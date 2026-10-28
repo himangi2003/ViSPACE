@@ -345,14 +345,63 @@ def extract_cluster_features(
     return row
 
 
+# Internal column names -> user-facing names written to the CSVs.
+# Area columns are converted from µm² to mm² (see UM2_TO_MM2_COLUMNS);
+# columns mapped to None are dropped (exact duplicates of a kept column).
+IMMUNE_REGION_COLUMN_NAMES = {
+    "cluster_id":                             "region_id",
+    "n_roi_boxes":                            "roi_box_count",
+    "cluster_area_um2":                       None,   # = region_area_mm2 * 1e6
+    "cluster_area_mm2":                       "region_area_mm2",
+    "til_area_total_um2":                     "til_total_area_mm2",
+    "til_area_intratumoral_um2":              "til_inside_area_mm2",
+    "til_area_extratumoral_um2":              "til_outside_area_mm2",
+    "til_contact_area_um2":                   "til_touching_area_mm2",
+    "til_fraction_intratumoral":              "til_share_inside_tumor",
+    "til_contact_fraction":                   "til_share_touching_tumor",
+    "til_pct_within_50um":                    "til_within_50um_pct",
+    "til_pct_within_100um":                   "til_within_100um_pct",
+    "til_pct_within_200um":                   "til_within_200um_pct",
+    "til_extratumoral_distance_aw_median_um": "til_outside_distance_median_um",
+    "immune_phenotype":                       "immune_phenotype",
+}
+
+IMMUNE_SUMMARY_COLUMN_NAMES = {
+    "wsi_til_area_total_um2":                     "til_total_area_mm2",
+    "wsi_til_fraction_intratumoral":              "til_share_inside_tumor",
+    "wsi_til_contact_fraction":                   "til_share_touching_tumor",
+    "wsi_til_pct_within_50um":                    "til_within_50um_pct",
+    "wsi_til_pct_within_100um":                   "til_within_100um_pct",
+    "wsi_til_pct_within_200um":                   "til_within_200um_pct",
+    "wsi_til_extratumoral_distance_aw_median_um": "til_outside_distance_median_um",
+    "wsi_dominant_immune_phenotype":              "immune_phenotype",
+}
+
+UM2_TO_MM2_COLUMNS = {
+    "til_area_total_um2", "til_area_intratumoral_um2",
+    "til_area_extratumoral_um2", "til_contact_area_um2",
+    "wsi_til_area_total_um2",
+}
+
+
+def rename_for_export(df: pd.DataFrame, names: dict) -> pd.DataFrame:
+    """Convert µm² areas to mm², drop duplicate columns, apply user-facing names."""
+    d = df.copy()
+    for c in UM2_TO_MM2_COLUMNS & set(d.columns):
+        d[c] = pd.to_numeric(d[c], errors="coerce") / 1e6
+    drop = [c for c, new in names.items() if new is None and c in d.columns]
+    keep = {c: new for c, new in names.items() if new is not None}
+    return d.drop(columns=drop).rename(columns=keep)
+
+
 def compute_wsi_summary(cluster_df: pd.DataFrame, cfg: _ImmuneCfg) -> pd.DataFrame:
     """Slide-level immune proximity summary, reduced to non-redundant features.
 
     Dropped as redundant: n_clusters / total_cluster_area_mm2 (duplicated in
     the TSR / morphology summaries), the mm² copy of TIL area, intratumoral /
-    extratumoral / contact areas (= fractions x total), the 100/200 µm
-    proximity percentages (nested with 50 µm; 200 µm is near-saturated) and
-    the constant run parameters.
+    extratumoral / contact areas (= fractions x total) and the constant run
+    parameters. The 50/100/200 µm proximity percentages and the dominant
+    phenotype label are kept.
     """
     total_til_um2     = float(cluster_df["til_area_total_um2"].sum())
     total_intra_um2   = float(cluster_df["til_area_intratumoral_um2"].sum())
@@ -364,12 +413,14 @@ def compute_wsi_summary(cluster_df: pd.DataFrame, cfg: _ImmuneCfg) -> pd.DataFra
         "wsi_til_contact_fraction":               safe_div(total_contact_um2, total_til_um2),
     }
 
-    # Only the 50 µm proximity band is kept; emitted as NaN if 50 µm is not
-    # among the configured thresholds so the schema stays stable.
-    out["wsi_til_pct_within_50um"] = np.nan
-    if "til_pct_within_50um" in cluster_df.columns:
-        area_within = cluster_df["til_pct_within_50um"].fillna(0) / 100.0 * cluster_df["til_area_total_um2"]
-        out["wsi_til_pct_within_50um"] = 100.0 * safe_div(float(area_within.sum()), total_til_um2)
+    # 50/100/200 µm proximity bands. Each is emitted as NaN if that distance
+    # is not among the configured thresholds so the schema stays stable.
+    for t in (50, 100, 200):
+        col = f"til_pct_within_{t}um"
+        out[f"wsi_til_pct_within_{t}um"] = np.nan
+        if col in cluster_df.columns:
+            area_within = cluster_df[col].fillna(0) / 100.0 * cluster_df["til_area_total_um2"]
+            out[f"wsi_til_pct_within_{t}um"] = 100.0 * safe_div(float(area_within.sum()), total_til_um2)
 
     valid = cluster_df[cluster_df["til_extratumoral_distance_aw_median_um"].notna()].copy()
     out["wsi_til_extratumoral_distance_aw_median_um"] = (
@@ -460,11 +511,11 @@ def plot_immune_proximity(
     ax_hist.axvline( 50, color="#e67e22", linewidth=1, linestyle=":")
     ax_hist.set_xlim(-300, 300)
     ax_hist.set_xlabel(
-        "Signed distance to tumour boundary (µm)\n"
-        "← negative = inside tumour     positive = outside tumour →", fontsize=10)
+        "Signed distance to tumor boundary (µm)\n"
+        "← negative = inside tumor     positive = outside tumor →", fontsize=10)
     ax_hist.set_ylabel("TIL area (mm²)", fontsize=10)
     ax_hist.set_title(
-        "Panel A — TIL distribution relative to tumour boundary\n"
+        "Panel A — TIL distribution relative to tumor boundary\n"
         "Blue: intratumoral   |   Orange: extratumoral", fontsize=10, pad=6)
     ax_hist.legend(loc="upper left", fontsize=9)
     ax_hist.grid(axis="y", alpha=0.2)
@@ -527,7 +578,7 @@ def plot_immune_proximity(
         ax_pheno.set_xlim(0, max(pheno_pct.values) * 1.25 if len(pheno_pct) else 100)
         ax_pheno.grid(axis="x", alpha=0.2)
 
-    fig.suptitle("Immune proximity analysis — TIL spatial relationship to tumour boundary",
+    fig.suptitle("Immune proximity analysis — TIL spatial relationship to tumor boundary",
                  fontsize=13, fontweight="bold", y=0.97)
     fig.savefig(out_png, dpi=200, facecolor="white", bbox_inches="tight")
     plt.close(fig)
@@ -609,8 +660,10 @@ def _run_immune_proximity(icfg: _ImmuneCfg) -> Tuple[pd.DataFrame, pd.DataFrame]
 
     cluster_csv = icfg.outdir / "immune_proximity_by_cluster.csv"
     wsi_csv     = icfg.outdir / "immune_proximity_wsi_summary.csv"
-    cluster_df.to_csv(cluster_csv, index=False)
-    wsi_df.to_csv(wsi_csv, index=False)
+    # Written with user-facing names; cluster_df / wsi_df keep the internal
+    # names used by the plot and console summary below.
+    rename_for_export(cluster_df, IMMUNE_REGION_COLUMN_NAMES).to_csv(cluster_csv, index=False)
+    rename_for_export(wsi_df, IMMUNE_SUMMARY_COLUMN_NAMES).to_csv(wsi_csv, index=False)
     print(f"  Wrote: {cluster_csv.name}")
     print(f"  Wrote: {wsi_csv.name}")
 

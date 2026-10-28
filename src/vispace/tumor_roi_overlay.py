@@ -2,20 +2,20 @@
 """
 tumor_roi_overlay.py
 ====================
-Tumour-focus detection and representative tumour ROI generation for ViSpace.
+Tumor-focus detection and representative tumor ROI generation for ViSpace.
 
 This version keeps the public entry point ``run_tumor_roi_overlay`` but changes
 its spatial model:
 
-1. FILTER tumour-positive segmentation tiles.
-2. BUILD physical tumour-focus geometries from tile footprints.
+1. FILTER tumor-positive segmentation tiles.
+2. BUILD physical tumor-focus geometries from tile footprints.
 3. REPAIR only small segmentation gaps using a physical closing distance.
-4. ASSIGN a stable ``focus_id`` to each tumour tile.
-5. RANK candidate ROI centres using local tumour continuity.
-6. PLACE non-overlapping square tumour ROIs for downstream image extraction.
-7. EXPORT tumour foci, focus-tile membership, ROI boxes, and QC overlays.
+4. ASSIGN a stable ``focus_id`` to each tumor tile.
+5. RANK candidate ROI centers using local tumor continuity.
+6. PLACE non-overlapping square tumor ROIs for downstream image extraction.
+7. EXPORT tumor foci, focus-tile membership, ROI boxes, and QC overlays.
 
-The final image ROIs remain square.  The tumour focus is the biological/spatial
+The final image ROIs remain square.  The tumor focus is the biological/spatial
 object; the ROI is a representative image sample from that focus rather than a
 full-clump tiling product.  ``ROI_MAX_ROIS_PER_FOCUS`` controls sampling depth.
 """
@@ -86,7 +86,7 @@ def iter_polygon_parts(geom: BaseGeometry) -> Iterable[Polygon]:
 
 
 def infer_tile_step(df: pd.DataFrame) -> Tuple[int, int]:
-    """Infer median x/y tile-centre spacing from the manifest."""
+    """Infer median x/y tile-center spacing from the manifest."""
     def _step(vals: pd.Series) -> int:
         u = np.sort(pd.Series(vals).dropna().unique())
         d = np.diff(u)
@@ -130,7 +130,7 @@ def build_tumor_foci(
     repair_gap_um: float,
     min_focus_area_um2: float,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Create tumour-focus polygons and assign every retained tumour tile a focus."""
+    """Create tumor-focus polygons and assign every retained tumor tile a focus."""
     step_x, step_y = infer_tile_step(df)
     tum = filter_tumor_tiles(df, min_tumor_frac)
     if tum.empty:
@@ -156,7 +156,6 @@ def build_tumor_foci(
         minx, miny, maxx, maxy = geom.bounds
         focus_rows.append({
             "focus_id": focus_id,
-            "cluster_id": focus_id,  # backward-compatible alias
             "geometry": geom,
             "focus_area_px2": float(geom.area),
             "focus_area_um2": float(geom.area * mpp * mpp),
@@ -187,7 +186,6 @@ def build_tumor_foci(
     tum["focus_id"] = assignments
     tum = tum.dropna(subset=["focus_id"]).copy()
     tum["focus_id"] = tum["focus_id"].astype(int)
-    tum["cluster_id"] = tum["focus_id"]
 
     counts = tum.groupby("focus_id").size().rename("n_tumor_tiles")
     mean_t = tum.groupby("focus_id")["frac_Tumour"].mean().rename("mean_tumor_fraction")
@@ -204,7 +202,7 @@ def add_local_tumor_score(
     neighbor_weight: float = 0.5,
     necrosis_penalty: float = 0.5,
 ) -> pd.DataFrame:
-    """Rank tumour tiles using configurable tumour/continuity/necrosis weights."""
+    """Rank tumor tiles using configurable tumor/continuity/necrosis weights."""
     if tum.empty:
         return tum.copy()
     step_x, step_y = infer_tile_step(full_df)
@@ -271,7 +269,7 @@ def build_rois_for_focus(
     max_necrosis: float,
     max_rois_per_focus: int = 0,
 ) -> List[dict]:
-    """Greedily place high-quality square ROIs centred on tumour tiles."""
+    """Greedily place high-quality square ROIs centered on tumor tiles."""
     if focus_tiles.empty:
         return []
 
@@ -301,7 +299,6 @@ def build_rois_for_focus(
 
         results.append({
             "focus_id": int(focus_id),
-            "cluster_id": int(focus_id),  # compatibility
             "x_min": bx1, "y_min": by1, "x_max": bx2, "y_max": by2,
             "center_x": float(r.wx), "center_y": float(r.wy),
             "roi_tiles": int(len(inside)),
@@ -321,12 +318,9 @@ def generate_rois(
     roi_size_um: float,
     mpp: float,
     max_necrosis: float,
-    min_cluster_tiles: int = 3,
-    connectivity: int = 8,
-    merge_gap_um: float = 0.0,
     *,
-    focus_repair_gap_um: Optional[float] = None,
-    min_focus_area_um2: Optional[float] = None,
+    focus_repair_gap_um: float = 25.0,
+    min_focus_area_um2: float = 60000.0,
     min_roi_tumor_frac: Optional[float] = None,
     tumor_signal_weight: float = 1.0,
     neighbor_weight: float = 0.5,
@@ -334,27 +328,16 @@ def generate_rois(
     max_rois_per_focus: int = 3,
     return_foci: bool = False,
 ):
-    """Generate tumour foci and representative square tumour ROIs.
+    """Generate tumor foci and representative square tumor ROIs.
 
     By default this retains the historical two-value return contract
-    ``(rois, tumour_tiles)``.  ``run_tumor_roi_overlay`` calls this function with
+    ``(rois, tumor_tiles)``.  ``run_tumor_roi_overlay`` calls this function with
     ``return_foci=True`` so that all generation logic lives in one place.
-
-    ``connectivity`` is retained only for call compatibility with the old BFS
-    implementation and is not used by the geometry-based focus detector.
-    ``merge_gap_um`` is interpreted only as a legacy fallback for
-    ``focus_repair_gap_um``; it is not used to merge biologically distinct foci.
 
     ROI selection is representative sampling, not full-clump tiling.  A finite
     ``max_rois_per_focus`` (default 3) caps sampling from large foci.
     """
     validate_manifest(df)
-    step_x, step_y = infer_tile_step(df)
-    if focus_repair_gap_um is None:
-        focus_repair_gap_um = min(float(merge_gap_um), 50.0) if merge_gap_um > 0 else 25.0
-    if min_focus_area_um2 is None:
-        tile_area_um2 = step_x * step_y * mpp * mpp
-        min_focus_area_um2 = max(1.0, min_cluster_tiles * tile_area_um2)
     if min_roi_tumor_frac is None:
         min_roi_tumor_frac = min_tumor_frac
 
@@ -381,7 +364,7 @@ def generate_rois(
 
     # Large foci get first access to space, but IDs are retained unchanged.
     order = foci.sort_values("focus_area_px2", ascending=False)["focus_id"].tolist()
-    for focus_id in tqdm(order, desc="Building tumour ROIs", unit="focus"):
+    for focus_id in tqdm(order, desc="Building tumor ROIs", unit="focus"):
         sub = tum.loc[tum["focus_id"] == focus_id]
         rows.extend(build_rois_for_focus(
             sub, df, int(focus_id), roi_size_px, accepted,
@@ -400,18 +383,48 @@ def generate_rois(
     return (rois, tum, foci) if return_foci else (rois, tum)
 
 
+# Internal ROI-box column names -> names written to tumor_roi_boxes.csv.
+# Coordinates are level-0 pixels. None = dropped (constant per run).
+ROI_BOX_COLUMN_NAMES = {
+    "roi_id":              "roi_id",
+    "focus_id":            "tumor_island_id",
+    "x_min":               "x_min_px",
+    "y_min":               "y_min_px",
+    "x_max":               "x_max_px",
+    "y_max":               "y_max_px",
+    "center_x":            "center_x_px",
+    "center_y":            "center_y_px",
+    "roi_tiles":           "roi_tile_count",
+    "neighbor_tumor_mean": "roi_neighbor_tumor_fraction",
+    "roi_candidate_score": "roi_candidate_score",
+    "tumor":               "roi_tumor_fraction",
+    "stroma":              "roi_stroma_fraction",
+    "inflammatory":        "roi_inflammatory_fraction",
+    "necrosis":            "roi_necrosis_fraction",
+    "others":              "roi_others_fraction",
+    "roi_size_px":         None,
+    "roi_size_um":         None,
+    "mpp":                 None,
+}
+
+
+def export_roi_boxes(rois: pd.DataFrame) -> pd.DataFrame:
+    """Return the ROI table with user-facing column names."""
+    drop = [c for c, new in ROI_BOX_COLUMN_NAMES.items() if new is None and c in rois.columns]
+    keep = {c: new for c, new in ROI_BOX_COLUMN_NAMES.items() if new is not None}
+    return rois.drop(columns=drop).rename(columns=keep)
+
+
 def export_foci_geojson(foci: pd.DataFrame, out_path: Path) -> None:
     features = []
     for r in foci.itertuples():
         props = {
-            "focus_id": int(r.focus_id),
-            "cluster_id": int(r.focus_id),
-            "focus_area_px2": float(r.focus_area_px2),
-            "focus_area_um2": float(r.focus_area_um2),
-            "focus_perimeter_um": float(r.focus_perimeter_um),
-            "centroid_x": float(r.centroid_x),
-            "centroid_y": float(r.centroid_y),
-            "n_tumor_tiles": int(r.n_tumor_tiles),
+            "tumor_island_id": int(r.focus_id),
+            "area_um2": float(r.focus_area_um2),
+            "perimeter_um": float(r.focus_perimeter_um),
+            "centroid_x_px": float(r.centroid_x),
+            "centroid_y_px": float(r.centroid_y),
+            "tumor_tile_count": int(r.n_tumor_tiles),
             "mean_tumor_fraction": float(r.mean_tumor_fraction),
         }
         features.append({"type": "Feature", "properties": props, "geometry": mapping(r.geometry)})
@@ -454,8 +467,8 @@ def draw_pseudo_legend(ax) -> None:
         for name in CLASS_ORDER
     ]
     handles.extend([
-        Line2D([0], [0], color="#111111", lw=1.6, label="Tumour focus outline"),
-        Line2D([0], [0], color="#111111", lw=1.4, label="Representative tumour ROI"),
+        Line2D([0], [0], color="#111111", lw=1.6, label="Tumor focus outline"),
+        Line2D([0], [0], color="#111111", lw=1.4, label="Representative tumor ROI"),
     ])
     ax.legend(handles=handles, loc="upper right", fontsize=8,
               framealpha=0.9, title="Segmentation / ROI")
@@ -464,8 +477,8 @@ def draw_pseudo_legend(ax) -> None:
 def draw_wsi_legend(ax) -> None:
     from matplotlib.lines import Line2D
     handles = [
-        Line2D([0], [0], color="#111111", lw=1.6, label="Tumour focus outline"),
-        Line2D([0], [0], color="#111111", lw=1.4, label="Representative tumour ROI"),
+        Line2D([0], [0], color="#111111", lw=1.6, label="Tumor focus outline"),
+        Line2D([0], [0], color="#111111", lw=1.4, label="Representative tumor ROI"),
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=8, framealpha=0.9)
 
@@ -503,7 +516,7 @@ def overlay_on_pseudo_thumbnail(
                     bbox=dict(facecolor="white", alpha=0.55, edgecolor="none", pad=0.3))
 
     draw_pseudo_legend(ax)
-    ax.set_title(f"Tumour foci and representative tumour ROIs — {len(rois)} ROI(s), {len(foci)} focus/foci, {roi_size_um:.0f} µm")
+    ax.set_title(f"Tumor foci and representative tumor ROIs — {len(rois)} ROI(s), {len(foci)} focus/foci, {roi_size_um:.0f} µm")
     ax.set_xlabel("WSI x coordinate (px)")
     ax.set_ylabel("WSI y coordinate (px)")
     ax.set_aspect("equal")
@@ -547,7 +560,7 @@ def overlay_on_wsi_thumbnail(
                                fill=False, edgecolor=color, linewidth=1.2))
     draw_wsi_legend(ax)
     ax.axis("off")
-    ax.set_title(f"Tumour foci + representative tumour ROIs ({roi_size_um:.0f} µm)")
+    ax.set_title(f"Tumor foci + representative tumor ROIs ({roi_size_um:.0f} µm)")
     fig.tight_layout()
     fig.savefig(out_png, dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -558,28 +571,28 @@ def overlay_on_wsi_thumbnail(
 
 
 def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
-    """Detect tumour foci and generate representative square tumour ROIs.
+    """Detect tumor foci and generate representative square tumor ROIs.
 
     Important ROI config fields
     ---------------------------
     ROI_SIZE_UM
         Square image-sampling ROI edge length in microns.
     ROI_MIN_TUMOR_FRAC
-        Minimum tile-level tumour fraction used to construct tumour foci.
+        Minimum tile-level tumor fraction used to construct tumor foci.
     ROI_FOCUS_REPAIR_GAP_UM
         Small physical closing distance for segmentation-gap repair only.
     ROI_MIN_FOCUS_AREA_UM2
-        Minimum physical tumour-focus area; raises this to suppress tiny foci.
+        Minimum physical tumor-focus area; raises this to suppress tiny foci.
     ROI_MIN_ROI_TUMOR_FRAC
-        Minimum tumour fraction required inside an accepted square ROI.
+        Minimum tumor fraction required inside an accepted square ROI.
     ROI_MAX_NECROSIS
         Maximum mean necrosis fraction allowed inside an accepted ROI.
     ROI_TUMOR_SIGNAL_WEIGHT
-        Weight on the candidate centre tile's tumour probability/fraction.
+        Weight on the candidate center tile's tumor probability/fraction.
     ROI_NEIGHBOR_TUMOR_WEIGHT
-        Weight on local neighbouring tumour continuity.
+        Weight on local neighboring tumor continuity.
     ROI_NECROSIS_PENALTY
-        Penalty applied to candidate centres with necrosis.
+        Penalty applied to candidate centers with necrosis.
     ROI_MAX_ROIS_PER_FOCUS
         Representative-sampling cap per focus.  Default 3; 0 means unlimited.
 
@@ -604,13 +617,8 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
     min_roi_tumor_frac = float(getattr(cfg, "ROI_MIN_ROI_TUMOR_FRAC", min_tumor_frac))
     max_necrosis = float(getattr(cfg, "ROI_MAX_NECROSIS", 0.50))
 
-    # Legacy fallbacks are read only to avoid breaking existing configs.
-    legacy_min_tiles = int(getattr(cfg, "ROI_MIN_CLUSTER_TILES", 3))
-    legacy_merge = float(getattr(cfg, "ROI_MERGE_GAP_UM", 0.0))
-    focus_repair_gap_um = float(getattr(
-        cfg, "ROI_FOCUS_REPAIR_GAP_UM",
-        min(legacy_merge, 50.0) if legacy_merge > 0 else 25.0,
-    ))
+    focus_repair_gap_um = float(getattr(cfg, "ROI_FOCUS_REPAIR_GAP_UM", 25.0))
+    min_focus_area_um2 = float(getattr(cfg, "ROI_MIN_FOCUS_AREA_UM2", 60000.0))
 
     tumor_signal_weight = float(getattr(cfg, "ROI_TUMOR_SIGNAL_WEIGHT", 1.0))
     neighbor_weight = float(getattr(cfg, "ROI_NEIGHBOR_TUMOR_WEIGHT", 0.5))
@@ -619,23 +627,20 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
 
     df = pd.read_csv(manifest_csv)
     validate_manifest(df)
-    step_x, step_y = infer_tile_step(df)
-    default_min_area = legacy_min_tiles * step_x * step_y * mpp * mpp
-    min_focus_area_um2 = float(getattr(cfg, "ROI_MIN_FOCUS_AREA_UM2", default_min_area))
 
     print(f"\n{'='*60}")
-    print("  Tumour focus + representative ROI generation")
+    print("  Tumor focus + representative ROI generation")
     print(f"  Slide                   : {slide_name}")
     print(f"  ROI size                : {roi_size_um:.0f} µm")
-    print(f"  Min tumour tile frac    : {min_tumor_frac:.3f}")
+    print(f"  Min tumor tile frac    : {min_tumor_frac:.3f}")
     print(f"  Focus repair gap        : {focus_repair_gap_um:.1f} µm")
     print(f"  Min focus area          : {min_focus_area_um2:.0f} µm²")
-    print(f"  Min final ROI tumour    : {min_roi_tumor_frac:.3f}")
+    print(f"  Min final ROI tumor    : {min_roi_tumor_frac:.3f}")
     print(f"  Max ROIs / focus        : {max_rois_per_focus if max_rois_per_focus > 0 else 'unlimited'}")
     print(
         "  Candidate score weights : "
-        f"tumour={tumor_signal_weight:g}, "
-        f"neighbour={neighbor_weight:g}, "
+        f"tumor={tumor_signal_weight:g}, "
+        f"neighbor={neighbor_weight:g}, "
         f"necrosis_penalty={necrosis_penalty:g}"
     )
     print(f"  Output                  : {out_dir}")
@@ -649,8 +654,6 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
         roi_size_um=roi_size_um,
         mpp=mpp,
         max_necrosis=max_necrosis,
-        min_cluster_tiles=legacy_min_tiles,
-        merge_gap_um=legacy_merge,
         focus_repair_gap_um=focus_repair_gap_um,
         min_focus_area_um2=min_focus_area_um2,
         min_roi_tumor_frac=min_roi_tumor_frac,
@@ -667,33 +670,26 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
     pseudo_png = out_dir / "tumor_roi_boxes_pseudo_thumbnail.png"
     wsi_png: Optional[str] = None
 
-    # cluster_id is intentionally retained everywhere for the TSR scorer and
-    # for backward compatibility with existing downstream tables.
-    if not rois.empty and "cluster_id" not in rois.columns:
-        rois["cluster_id"] = rois["focus_id"]
-    if not tum.empty and "cluster_id" not in tum.columns:
-        tum["cluster_id"] = tum["focus_id"]
-    if not foci.empty and "cluster_id" not in foci.columns:
-        foci["cluster_id"] = foci["focus_id"]
-
-    rois.to_csv(roi_csv, index=False)
+    # Files are written with user-facing names; rois / tum / foci keep the
+    # internal names (focus_id, x_min, ...) used by the overlays below.
+    export_roi_boxes(rois).to_csv(roi_csv, index=False)
     export_foci_geojson(foci, foci_geojson)
-    tum.to_csv(focus_tiles_csv, index=False)
+    tum.rename(columns={"focus_id": "tumor_island_id"}).to_csv(focus_tiles_csv, index=False)
 
     n_candidate_tiles = int((df["frac_Tumour"] >= min_tumor_frac).sum())
     if n_candidate_tiles == 0:
         print(
-            "  WARNING: no tumour-positive tiles passed ROI_MIN_TUMOR_FRAC. "
+            "  WARNING: no tumor-positive tiles passed ROI_MIN_TUMOR_FRAC. "
             "Lower ROI_MIN_TUMOR_FRAC only if this is inconsistent with the segmentation."
         )
     elif foci.empty:
         print(
-            "  WARNING: tumour-positive tiles were found, but every focus was removed. "
+            "  WARNING: tumor-positive tiles were found, but every focus was removed. "
             "Check ROI_MIN_FOCUS_AREA_UM2 and ROI_FOCUS_REPAIR_GAP_UM."
         )
     elif rois.empty:
         print(
-            "  WARNING: tumour foci were detected but no representative ROI passed QC. "
+            "  WARNING: tumor foci were detected but no representative ROI passed QC. "
             "Check ROI_MIN_ROI_TUMOR_FRAC, ROI_MAX_NECROSIS, and ROI_SIZE_UM."
         )
 
@@ -721,8 +717,8 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
     else:
         print("  WARNING: WSI file not found on disk; skipped WSI thumbnail overlay.")
 
-    print(f"  Tumour foci : {len(foci)}")
-    print(f"  Tumour ROIs : {len(rois)}")
+    print(f"  Tumor foci : {len(foci)}")
+    print(f"  Tumor ROIs : {len(rois)}")
     print(f"  Wrote       : {roi_csv}")
     print(f"  Wrote       : {foci_geojson}")
 
@@ -736,7 +732,6 @@ def run_tumor_roi_overlay(wsi_path: str, cfg: PipelineConfig = None) -> dict:
         "wsi_png": wsi_png,
         "n_boxes": int(len(rois)),
         "n_foci": int(len(foci)),
-        "n_clusters": int(len(foci)),  # compatibility
     }
 
 

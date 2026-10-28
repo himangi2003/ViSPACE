@@ -1,6 +1,6 @@
 ---
 title: "ViSpace Pathology Report"
-subtitle: "Whole-Slide Tissue Segmentation & Tumour Microenvironment Analysis"
+subtitle: "Whole-Slide Tissue Segmentation & Tumor Microenvironment Analysis"
 format:
   html:
     theme: [cosmo, vispace_report_style.scss]
@@ -74,7 +74,7 @@ manifest    = load_csv(seg / "manifest.csv")
 
 # TSR/TIL stage: the legacy filenames remain the stable report contract.
 # Each row in tils_tsr_by_cluster.csv now represents one Master ROI
-# (cluster_id is a backward-compatible alias of master_roi_id).
+# (region_id identifies the Master ROI).
 tsr_cluster = load_csv(tsr_d / "tils_tsr_by_cluster.csv")
 tsr_summary = load_csv(tsr_d / "tils_tsr_wsi_summary.csv")
 
@@ -86,7 +86,7 @@ mor_cluster = load_csv(mor_d / "tumor_core_features_by_cluster.csv")
 mor_summary = load_csv(mor_d / "tumor_core_wsi_summary.csv")
 
 CLASS_COLORS = {
-    "Tumour":       "#e31a1c",
+    "Tumor":        "#e31a1c",
     "Stroma":       "#33a02c",
     "Inflammatory": "#1f78b4",
     "Necrosis":     "#ff9f1c",
@@ -245,11 +245,14 @@ def cluster_chips(df, fields, badge_field=None, badge_color_fn=None, max_cards=1
         display(Markdown("*No per-cluster data available.*"))
         return
     d = df.copy()
-    if "cluster_id" in d.columns:
-        d = d.sort_values("cluster_id")
+    # Feature tables use region_id; older outputs used cluster_id.
+    id_col = "region_id" if "region_id" in d.columns else "cluster_id"
+    if id_col in d.columns:
+        d = d.sort_values(id_col)
     if len(d) > max_cards:
-        # Keep report readable: show tumour/feature-rich clusters first when possible.
-        priority_cols = ["tumor_area_mm2", "til_area_total_um2", "necrosis_area_um2", "cluster_area_mm2"]
+        # Keep report readable: show tumor/feature-rich clusters first when possible.
+        priority_cols = ["tumor_area_mm2", "til_total_area_mm2", "necrosis_area_mm2",
+                         "cluster_area_mm2", "region_area_mm2"]
         for c in priority_cols:
             if c in d.columns:
                 d = d.sort_values(c, ascending=False)
@@ -257,7 +260,7 @@ def cluster_chips(df, fields, badge_field=None, badge_color_fn=None, max_cards=1
         d = d.head(max_cards)
     chips = []
     for _, r in d.iterrows():
-        cid = int(r["cluster_id"]) if "cluster_id" in d.columns and pd.notna(r.get("cluster_id")) else "—"
+        cid = int(r[id_col]) if id_col in d.columns and pd.notna(r.get(id_col)) else "—"
         lines = []
         for cols, label, kind in fields:
             raw, _ = first_value(r, cols)
@@ -443,7 +446,7 @@ def stil_level(value, reliable=True):
 
 
 def tsr_pct_from_ratio(ratio):
-    """(tumour %, stroma %) of the tumour + stroma compartment from tumour:stroma ratio."""
+    """(tumor %, stroma %) of the tumor + stroma compartment from tumor:stroma ratio."""
     r = _num(ratio)
     if r is None or r < 0:
         return None, None
@@ -458,12 +461,12 @@ def tsr_topology(cluster_df):
     if cluster_df is None or cluster_df.empty:
         return out
     d = cluster_df
-    out["n_master_rois"] = int(d["cluster_id"].nunique()) if "cluster_id" in d.columns else int(len(d))
+    out["n_master_rois"] = int(d["region_id"].nunique()) if "region_id" in d.columns else int(len(d))
     for key, col, agg in [
-        ("n_foci", "n_foci", "sum"),
-        ("n_intertumor_edges", "n_intertumor_edges", "sum"),
-        ("total_master_area_mm2", "master_area_mm2", "sum"),
-        ("mean_master_tissue_fraction", "tissue_fraction", "mean"),
+        ("n_foci", "tumor_island_count", "sum"),
+        ("n_intertumor_edges", "tumor_link_count", "sum"),
+        ("total_master_area_mm2", "region_area_mm2", "sum"),
+        ("mean_master_tissue_fraction", "tissue_coverage_fraction", "mean"),
     ]:
         if col in d.columns:
             out[key] = _num(pd.to_numeric(d[col], errors="coerce").agg(agg))
@@ -473,11 +476,11 @@ def tsr_topology(cluster_df):
 # ── Scale definitions based on feature scripts ─────────────────────────────
 # ── TSR / compartment-resolved TIL scale reference
 # Slide-level Master-ROI scorer outputs (tils_tsr_wsi_summary.csv):
-#   WSI_tumor_stroma_ratio                 -> tumour area / stroma area
-#   WSI_TSR_category                       -> stroma-high / stroma-low
-#   WSI_sTIL_pct                           -> stromal inflammatory occupancy
-#   WSI_neighborhood_intratumoral_TIL_pct  -> computational intratumoral TIL
-#   WSI_inter_tumor_sTILs_pct              -> inflammatory occupancy between foci
+#   tsr_tumor_to_stroma_ratio                 -> tumor area / stroma area
+#   tsr_category                       -> stroma-high / stroma-low
+#   til_stromal_pct                           -> stromal inflammatory occupancy
+#   til_intratumoral_pct  -> computational intratumoral TIL
+#   til_between_tumor_pct              -> inflammatory occupancy between foci
 # Stroma % shown below is derived from the ratio (100 / (1 + ratio)).
 
 TSR_SCALES = [
@@ -485,13 +488,13 @@ TSR_SCALES = [
         "label": "Stroma fraction",
         "cols": ["_stroma_pct_from_ratio"],
         "lo": 0, "hi": 100,
-        "low": "tumour-dominant", "high": "stroma-dominant",
+        "low": "tumor-dominant", "high": "stroma-dominant",
         "kind": "pct",
-        "meaning": "Stroma as a percentage of the tumour + stroma compartment, derived from the tumour:stroma ratio.",
+        "meaning": "Stroma as a percentage of the tumor + stroma compartment, derived from the tumor:stroma ratio.",
     },
     {
         "label": "Stromal TIL occupancy",
-        "cols": ["WSI_sTIL_pct"],
+        "cols": ["til_stromal_pct"],
         "lo": 0, "hi": 100,
         "low": "low stromal inflammation", "high": "high stromal inflammation",
         "kind": "pct",
@@ -499,88 +502,88 @@ TSR_SCALES = [
     },
     {
         "label": "Intratumoral TIL",
-        "cols": ["WSI_neighborhood_intratumoral_TIL_pct"],
+        "cols": ["til_intratumoral_pct"],
         "lo": 0, "hi": 100,
         "low": "low intratumoral inflammation", "high": "high intratumoral inflammation",
         "kind": "pct",
-        "meaning": "Inflammatory occupancy within the computational tumour-bed compartment.",
+        "meaning": "Inflammatory occupancy within the computational tumor-bed compartment.",
     },
     {
-        "label": "Inter-tumour stromal TIL",
-        "cols": ["WSI_inter_tumor_sTILs_pct"],
+        "label": "Inter-tumor stromal TIL",
+        "cols": ["til_between_tumor_pct"],
         "lo": 0, "hi": 100,
         "low": "immune-poor between foci", "high": "immune-rich between foci",
         "kind": "pct",
-        "meaning": "Inflammatory occupancy specifically within validated tissue corridors between connected tumour foci.",
+        "meaning": "Inflammatory occupancy specifically within validated tissue corridors between connected tumor foci.",
     },
 ]
 
 IMMUNE_SCALES = [
     {"label":"Intratumoral inflammatory fraction",
-     "cols":"wsi_til_fraction_intratumoral",
+     "cols":"til_share_inside_tumor",
      "lo":0, "hi":1, "low":"predominantly extratumoral", "high":"predominantly intratumoral",
      "kind":"pct_frac",
-     "meaning":"Fraction of total inflammatory area assigned within tumour polygons."},
-    {"label":"Tumour-contact fraction",
-     "cols":"wsi_til_contact_fraction",
+     "meaning":"Fraction of total inflammatory area assigned within tumor polygons."},
+    {"label":"Tumor-contact fraction",
+     "cols":"til_share_touching_tumor",
      "lo":0, "hi":1, "low":"little boundary contact", "high":"high boundary contact",
      "kind":"pct_frac",
-     "meaning":"Fraction of inflammatory area within the configured tumour-contact tolerance (default 5 µm)."},
+     "meaning":"Fraction of inflammatory area within the configured tumor-contact tolerance (default 5 µm)."},
     {"label":"Inflammatory area within 50 µm",
-     "cols":"wsi_til_pct_within_50um",
+     "cols":"til_within_50um_pct",
      "lo":0, "hi":100, "low":"distant", "high":"margin-localized",
      "kind":"pct",
-     "meaning":"Area-weighted percentage of inflammatory tissue within 50 µm of the tumour boundary."},
+     "meaning":"Area-weighted percentage of inflammatory tissue within 50 µm of the tumor boundary."},
     {"label":"Inflammatory area within 100 µm",
-     "cols":"wsi_til_pct_within_100um",
-     "lo":0, "hi":100, "low":"distant", "high":"near tumour",
+     "cols":"til_within_100um_pct",
+     "lo":0, "hi":100, "low":"distant", "high":"near tumor",
      "kind":"pct",
-     "meaning":"Area-weighted percentage of inflammatory tissue within 100 µm of the tumour boundary."},
+     "meaning":"Area-weighted percentage of inflammatory tissue within 100 µm of the tumor boundary."},
     {"label":"Inflammatory area within 200 µm",
-     "cols":"wsi_til_pct_within_200um",
+     "cols":"til_within_200um_pct",
      "lo":0, "hi":100, "low":"distant", "high":"regional proximity",
      "kind":"pct",
-     "meaning":"Area-weighted percentage of inflammatory tissue within 200 µm of the tumour boundary."},
+     "meaning":"Area-weighted percentage of inflammatory tissue within 200 µm of the tumor boundary."},
     {"label":"Median extratumoral distance",
-     "cols":"wsi_til_extratumoral_distance_aw_median_um",
-     "lo":0, "hi":200, "low":"near tumour", "high":"excluded/distant",
+     "cols":"til_outside_distance_median_um",
+     "lo":0, "hi":200, "low":"near tumor", "high":"excluded/distant",
      "kind":"um",
-     "meaning":"Area-weighted median distance of extratumoral inflammatory components from the tumour boundary."},
+     "meaning":"Area-weighted median distance of extratumoral inflammatory components from the tumor boundary."},
 ]
 
 NECROSIS_SCALES = [
     {
         "label": "Necrosis fraction",
-        "cols": ["wsi_necrosis_fraction_of_cluster", "wsi_necrosis_fraction", "wsi_necrosis_frac"],
+        "cols": ["necrosis_tissue_fraction"],
         "lo": 0, "hi": 1,
         "low": "absent / rare", "high": "necrosis-rich",
         "kind": "pct_frac",
         "meaning": (
-            "Necrosis area divided by total segmented tissue area in the analysed cluster. "
-            "Drives the phenotype classification: 0 → absent; below focal threshold (default 5%) → focal; "
+            "Necrosis area divided by total segmented tissue area across the tumor regions (Master ROIs). "
+            "Drives the category: 0 → absent; below focal threshold (default 5%) → focal; "
             "above threshold → present."
         ),
     },
     {
         "label": "Necrosis area",
-        "cols": ["wsi_necrosis_area_um2", "wsi_necrosis_area_total_um2", "wsi_necrosis_area_mm2"],
-        "lo": 0, "hi": 500000,
+        "cols": ["necrosis_area_mm2"],
+        "lo": 0, "hi": 0.5,
         "low": "minimal", "high": "extensive",
-        "kind": "num",
+        "kind": "mm2",
         "meaning": (
-            "Total necrosis polygon area within scored clusters, in µm². "
+            "Total necrosis polygon area within scored regions, in mm². "
             "Computed after excluding sub-threshold fragments (default < 500 µm²). "
             "Zero indicates no necrosis detected."
         ),
     },
     {
         "label": "Necrosis perimeter",
-        "cols": ["wsi_necrosis_perimeter_um", "wsi_necrosis_total_perimeter_um"],
-        "lo": 0, "hi": 20000,
+        "cols": ["necrosis_boundary_length_mm"],
+        "lo": 0, "hi": 20,
         "low": "compact / absent", "high": "complex / fragmented",
-        "kind": "um",
+        "kind": "mm",
         "meaning": (
-            "Total perimeter of necrosis polygon boundaries in µm. "
+            "Total perimeter of necrosis polygon boundaries in mm. "
             "A high perimeter relative to area indicates multiple small punctate foci "
             "rather than a single confluent geographic zone."
         ),
@@ -588,72 +591,66 @@ NECROSIS_SCALES = [
 ]
 
 MORPH_SCALES = [
-    {"label":"Tumour fraction",
-     "cols":"wsi_tumor_fraction_of_cluster",
+    {"label":"Tumor fraction",
+     "cols":"tumor_area_fraction",
      "lo":0, "hi":1, "low":"sparse", "high":"dense",
      "kind":"pct_frac",
-     "meaning":"Share of analysed tumour-associated cluster area occupied by tumour."},
+     "meaning":"Share of analyzed tumor-associated cluster area occupied by tumor."},
     {"label":"Boundary density",
-     "cols":"wsi_tumor_boundary_density_per_mm",
+     "cols":"tumor_edge_per_area_per_mm",
      "lo":0, "hi":50, "low":"lower boundary density", "high":"higher boundary density",
      "kind":"per_mm",
-     "meaning":"Tumour boundary density = tumour perimeter (mm) / tumour area (mm²), reported in mm⁻¹."},
+     "meaning":"Tumor boundary density = tumor perimeter (mm) / tumor area (mm²), reported in mm⁻¹."},
     {"label":"Boundary fractal dimension",
-     "cols":"wsi_area_weighted_tumor_boundary_fractal_dimension",
+     "cols":"tumor_edge_irregularity",
      "lo":1, "hi":2, "low":"smoother boundary", "high":"more multiscale irregularity",
      "kind":"num",
-     "meaning":"Area-weighted box-counting estimate of tumour-boundary fractal dimension."},
+     "meaning":"Area-weighted box-counting estimate of tumor-boundary fractal dimension."},
     {"label":"Compactness",
-     "cols":"wsi_area_weighted_tumor_compactness_mean",
+     "cols":"tumor_island_roundness",
      "lo":0, "hi":1, "low":"irregular", "high":"compact",
      "kind":"num",
-     "meaning":"Area-weighted 4πA/P² across retained tumour islands."},
+     "meaning":"Area-weighted 4πA/P² across retained tumor islands."},
     {"label":"Solidity",
-     "cols":"wsi_area_weighted_tumor_solidity_mean",
+     "cols":"tumor_island_solidity",
      "lo":0, "hi":1, "low":"concave", "high":"filled",
      "kind":"num",
      "meaning":"Area-weighted island area divided by convex-hull area."},
     {"label":"Elongation",
-     "cols":"wsi_area_weighted_tumor_elongation_mean",
+     "cols":"tumor_island_elongation",
      "lo":1, "hi":3, "low":"isotropic", "high":"elongated",
      "kind":"num",
-     "meaning":"Area-weighted major/minor axis ratio of tumour islands."},
+     "meaning":"Area-weighted major/minor axis ratio of tumor islands."},
     {"label":"Largest patch index",
-     "cols":"wsi_area_weighted_tumor_largest_patch_index",
+     "cols":"tumor_largest_island_share",
      "lo":0, "hi":1, "low":"distributed", "high":"one island dominates",
      "kind":"num",
-     "meaning":"Fraction of tumour area represented by the largest connected island."},
+     "meaning":"Fraction of tumor area represented by the largest connected island."},
 ]
 
 
 def morph_charts(df):
-    """By-cluster tumour morphology charts with Plotly and static fallback."""
+    """By-cluster tumor morphology charts with Plotly and static fallback."""
     if df is None or df.empty or "tumor_area_mm2" not in df.columns:
-        return "<p><em>No tumour-positive clusters to chart.</em></p>"
+        return "<p><em>No tumor-positive clusters to chart.</em></p>"
 
     d = df[df["tumor_area_mm2"].fillna(0) > 0].copy().sort_values(
         "tumor_area_mm2", ascending=False
     )
     if d.empty:
-        return "<p><em>No tumour-positive clusters to chart.</em></p>"
+        return "<p><em>No tumor-positive clusters to chart.</em></p>"
 
-    d["lbl"] = "C" + d["cluster_id"].astype(int).astype(str)
+    d["lbl"] = "C" + d["region_id"].astype(int).astype(str)
     static_mode = str(os.environ.get("VIPSEGD_STATIC_CHARTS", "")).strip().lower() in (
         "1", "true", "yes", "on"
     )
 
-    perimeter_col = (
-        "tumor_perimeter_mm"
-        if "tumor_perimeter_mm" in d.columns
-        else "tumor_perimeter_um"
-    )
-    perimeter_title = "Perimeter (mm)" if perimeter_col == "tumor_perimeter_mm" else "Perimeter (µm)"
 
     chart_specs = [
         ("tumor_area_mm2", "Area (mm²)", 1.0, None),
-        (perimeter_col, perimeter_title, 1.0, None),
-        ("tumor_n_islands", "Islands", 1.0, None),
-        ("tumor_largest_patch_index", "Largest patch index", 1.0, [0, 1]),
+        ("tumor_boundary_length_mm", "Perimeter (mm)", 1.0, None),
+        ("tumor_island_count", "Islands", 1.0, None),
+        ("tumor_largest_island_share", "Largest island share", 1.0, [0, 1]),
     ]
     chart_specs = [x for x in chart_specs if x[0] in d.columns]
 
@@ -691,12 +688,12 @@ def morph_charts(df):
             )
 
             bubble = ""
-            if {"tumor_n_islands", "tumor_largest_patch_index"}.issubset(d.columns):
+            if {"tumor_island_count", "tumor_largest_island_share"}.issubset(d.columns):
                 sizes = d["tumor_area_mm2"].to_numpy(float)
                 smax = max(sizes.max(), 1e-9)
                 fig2 = go.Figure(go.Scatter(
-                    x=d["tumor_n_islands"],
-                    y=d["tumor_largest_patch_index"],
+                    x=d["tumor_island_count"],
+                    y=d["tumor_largest_island_share"],
                     mode="markers+text",
                     text=d["lbl"],
                     textposition="middle center",
@@ -709,8 +706,8 @@ def morph_charts(df):
                 ))
                 fig2.update_layout(
                     height=345, margin=dict(l=55, r=15, t=15, b=45),
-                    xaxis_title="Number of tumour islands",
-                    yaxis_title="Largest patch index",
+                    xaxis_title="Number of tumor islands",
+                    yaxis_title="Largest island share",
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(size=12, color="#1f2733")
@@ -719,8 +716,8 @@ def morph_charts(df):
                 fig2.update_xaxes(gridcolor="rgba(31,39,51,0.12)", color="#5b6678")
                 fig2.update_yaxes(gridcolor="rgba(31,39,51,0.12)", color="#5b6678")
                 bubble = (
-                    '<div class="chart-cap">Tumour island organisation: '
-                    'bubble size ∝ tumour area.</div>'
+                    '<div class="chart-cap">Tumor island organization: '
+                    'bubble size ∝ tumor area.</div>'
                     + '<div class="chart-block">'
                     + pio.to_html(fig2, include_plotlyjs=False, full_html=False,
                                   config={"displayModeBar": False})
@@ -774,9 +771,9 @@ display(HTML(
     '<div class="report-meta">'
     f'<span class="meta-pill">Slide ID&nbsp;<strong>{_html.escape(slide_name)}</strong></span>'
     f'<span class="meta-pill">Master ROIs&nbsp;<strong>{n_master_rois}</strong></span>'
-    f'<span class="meta-pill">Tumour foci&nbsp;<strong>{n_foci}</strong></span>'
-    f'<span class="meta-pill">Inter-tumour edges&nbsp;<strong>{n_intertumor_edges}</strong></span>'
-    f'<span class="meta-pill">Tiles analysed&nbsp;<strong>{n_tiles:,}</strong></span>'
+    f'<span class="meta-pill">Tumor foci&nbsp;<strong>{n_foci}</strong></span>'
+    f'<span class="meta-pill">Inter-tumor edges&nbsp;<strong>{n_intertumor_edges}</strong></span>'
+    f'<span class="meta-pill">Tiles analyzed&nbsp;<strong>{n_tiles:,}</strong></span>'
     '</div>'
 ))
 ```
@@ -799,7 +796,7 @@ show_image(tess / "thumbnail.png", max_width=1800,
 ```{python}
 reference_box("Display reference", [
     "This thumbnail is for orientation only; quantitative measurements below are taken from segmentation-derived polygons and CSV outputs.",
-    "Area is reported in mm², tumour perimeter in mm, local distances in µm, and percentages are either true percentages or fractions converted to percent where noted."
+    "Area is reported in mm², tumor perimeter in mm, local distances in µm, and percentages are either true percentages or fractions converted to percent where noted."
 ])
 ```
 
@@ -822,26 +819,26 @@ show_image(seg / f"{slide_name}_segmentation.png", max_width=1200, max_bytes=2_0
 ```{python}
 display(HTML('<div class="legend-row">' + ''.join(badge(k, v) for k, v in CLASS_COLORS.items()) + '</div>'))
 reference_box("Segmentation class reference", [
-    "Tumour, stroma, inflammatory, necrosis, and other tissue regions are colour-coded from the stitched segmentation output."])
+    "Tumor, stroma, inflammatory, necrosis, and other tissue regions are color-coded from the stitched segmentation output."])
 ```
 
 ---
 
-# Tumour–Stroma Ratio (TSR) & Spatial TIL Compartments
+# Tumor–Stroma Ratio (TSR) & Spatial TIL Compartments
 
 ```{python}
 section_intro(
     "Master-ROI microenvironment scoring",
-    "Tumour–stroma ratio and compartment-resolved TIL analysis",
-    "Tumour foci are grouped into graph-connected Master ROIs using validated inter-tumour relationships. "
-    "TSR is measured over the full Master ROI rather than representative square tumour ROIs. "
-    "Inflammatory tissue is then summarized separately in tumour-associated stroma, the computational tumour bed, "
-    "and validated tissue corridors between distinct tumour foci."
+    "Tumor–stroma ratio and compartment-resolved TIL analysis",
+    "Tumor foci are grouped into graph-connected Master ROIs using validated inter-tumor relationships. "
+    "TSR is measured over the full Master ROI rather than representative square tumor ROIs. "
+    "Inflammatory tissue is then summarized separately in tumor-associated stroma, the computational tumor bed, "
+    "and validated tissue corridors between distinct tumor foci."
 )
 ```
 
 ```{python}
-#| fig-cap: "Master-ROI TSR/TIL overlay. Tissue classes are shown beneath Master-ROI outlines; outline colour reflects the descriptive stromal-TIL band."
+#| fig-cap: "Master-ROI TSR/TIL overlay. Tissue classes are shown beneath Master-ROI outlines; outline color reflects the descriptive stromal-TIL band."
 #| label: fig-tsr
 show_image(
     tsr_d / "cluster_tils_tsr_overlay.png",
@@ -861,12 +858,12 @@ if tsr_summary.empty:
 else:
     r = tsr_summary.iloc[0]
 
-    ratio = _num(r.get("WSI_tumor_stroma_ratio"))
+    ratio = _num(r.get("tsr_tumor_to_stroma_ratio"))
     tumor_pct, stroma_pct = tsr_pct_from_ratio(ratio)
 
-    stil = _num(r.get("WSI_sTIL_pct"))
-    itil = _num(r.get("WSI_neighborhood_intratumoral_TIL_pct"))
-    inter_stil = _num(r.get("WSI_inter_tumor_sTILs_pct"))
+    stil = _num(r.get("til_stromal_pct"))
+    itil = _num(r.get("til_intratumoral_pct"))
+    inter_stil = _num(r.get("til_between_tumor_pct"))
 
     tsr_display = (
         f"{tumor_pct:.0f} : {stroma_pct:.0f}"
@@ -874,19 +871,19 @@ else:
         else "—"
     )
 
-    category = first_value(r, ["WSI_TSR_category"])[0]
+    category = first_value(r, ["tsr_category"])[0]
     category = fmt_str(category) if category is not None else "—"
 
     metric_cards([
         (
             "TSR",
             tsr_display,
-            "tumour : stroma (%)",
+            "tumor : stroma (%)",
         ),
         (
             "TME category",
             category,
-            "descriptive tumour–stroma balance",
+            "descriptive tumor–stroma balance",
         ),
         (
             "sTIL",
@@ -899,24 +896,24 @@ else:
             "computational intratumoral occupancy",
         ),
         (
-            "Inter-tumour sTIL",
+            "Inter-tumor sTIL",
             fmt_pct(inter_stil),
             "inflammatory occupancy between foci",
         ),
         (
-            "Tumour : stroma ratio",
+            "Tumor : stroma ratio",
             fmt_num(ratio),
-            "tumour area / stroma area",
+            "tumor area / stroma area",
         ),
         (
-            "Tumour foci",
+            "Tumor foci",
             fmt_int(tsr_topo["n_foci"]),
-            "retained tumour foci",
+            "retained tumor foci",
         ),
         (
             "Master ROIs",
             fmt_int(tsr_topo["n_master_rois"]),
-            "local tumour ecosystems",
+            "local tumor ecosystems",
         ),
     ])
 ```
@@ -926,10 +923,10 @@ else:
 if not tsr_summary.empty:
     r = tsr_summary.iloc[0]
 
-    stroma_pct = tsr_pct_from_ratio(r.get("WSI_tumor_stroma_ratio"))[1]
-    stil = _num(r.get("WSI_sTIL_pct"))
-    itil = _num(r.get("WSI_neighborhood_intratumoral_TIL_pct"))
-    inter_stil = _num(r.get("WSI_inter_tumor_sTILs_pct"))
+    stroma_pct = tsr_pct_from_ratio(r.get("tsr_tumor_to_stroma_ratio"))[1]
+    stil = _num(r.get("til_stromal_pct"))
+    itil = _num(r.get("til_intratumoral_pct"))
+    inter_stil = _num(r.get("til_between_tumor_pct"))
 
     n_master = _num(tsr_topo["n_master_rois"])
     n_foci = _num(tsr_topo["n_foci"])
@@ -941,26 +938,26 @@ if not tsr_summary.empty:
         if stroma_pct >= 50:
             sentences.append(
                 f"The scored Master ROIs are stroma-dominant "
-                f"({stroma_pct:.1f}% stroma within the tumour–stroma compartment)."
+                f"({stroma_pct:.1f}% stroma within the tumor–stroma compartment)."
             )
         else:
             sentences.append(
-                f"The scored Master ROIs are tumour-dominant "
-                f"({stroma_pct:.1f}% stroma within the tumour–stroma compartment)."
+                f"The scored Master ROIs are tumor-dominant "
+                f"({stroma_pct:.1f}% stroma within the tumor–stroma compartment)."
             )
 
     if stil is not None and itil is not None:
         if stil > itil + 2:
             sentences.append(
-                f"Inflammatory occupancy is greater in tumour-associated stroma "
-                f"(sTIL {stil:.1f}%) than within the computational tumour bed "
+                f"Inflammatory occupancy is greater in tumor-associated stroma "
+                f"(sTIL {stil:.1f}%) than within the computational tumor bed "
                 f"(iTIL {itil:.1f}%), indicating predominantly stromal immune localisation."
             )
         elif itil > stil + 2:
             sentences.append(
                 f"Intratumoral inflammatory occupancy (iTIL {itil:.1f}%) exceeds "
                 f"stromal inflammatory occupancy (sTIL {stil:.1f}%), indicating relatively "
-                f"greater immune localisation within the reconstructed tumour compartment."
+                f"greater immune localisation within the reconstructed tumor compartment."
             )
         else:
             sentences.append(
@@ -974,26 +971,26 @@ if not tsr_summary.empty:
             if abs(delta) >= 2:
                 direction = "higher" if delta > 0 else "lower"
                 sentences.append(
-                    f"Inter-tumour stromal TIL is {inter_stil:.1f}%, "
+                    f"Inter-tumor stromal TIL is {inter_stil:.1f}%, "
                     f"{abs(delta):.1f} percentage points {direction} than overall "
-                    f"tumour-associated stromal TIL."
+                    f"tumor-associated stromal TIL."
                 )
             else:
                 sentences.append(
-                    f"Inter-tumour stromal TIL ({inter_stil:.1f}%) is similar to "
+                    f"Inter-tumor stromal TIL ({inter_stil:.1f}%) is similar to "
                     f"overall stromal inflammatory occupancy."
                 )
         else:
             sentences.append(
-                f"Inter-tumour stromal TIL is {inter_stil:.1f}% across validated corridors."
+                f"Inter-tumor stromal TIL is {inter_stil:.1f}% across validated corridors."
             )
 
     if n_master is not None and n_foci is not None:
         sentences.append(
-            f"The analysis contains {int(n_foci)} retained tumour foci organized into "
+            f"The analysis contains {int(n_foci)} retained tumor foci organized into "
             f"{int(n_master)} Master ROI(s)"
             + (
-                f" with {int(n_edges)} accepted inter-tumour edge(s)."
+                f" with {int(n_edges)} accepted inter-tumor edge(s)."
                 if n_edges is not None else "."
             )
         )
@@ -1014,17 +1011,11 @@ if not tsr_summary.empty:
 if not tsr_cluster.empty:
     tsr_cluster = tsr_cluster.copy()
 
-    # Use the new reliability column; fall back only for older outputs.
-    if "sTILs_reliable" in tsr_cluster.columns:
-        _stil_rel_col = "sTILs_reliable"
-    elif "sTIL_reliable" in tsr_cluster.columns:
-        _stil_rel_col = "sTIL_reliable"
-    else:
-        _stil_rel_col = None
+    _stil_rel_col = "qc_til_stromal_ok" if "qc_til_stromal_ok" in tsr_cluster.columns else None
 
     tsr_cluster["sTILs_level"] = tsr_cluster.apply(
         lambda row: stil_level(
-            row.get("sTIL_pct"),
+            row.get("til_stromal_pct"),
             bool(row.get(_stil_rel_col, True)) if _stil_rel_col else True,
         ),
         axis=1,
@@ -1033,22 +1024,22 @@ if not tsr_cluster.empty:
 cluster_chips(
     tsr_cluster,
     fields=[
-        (["focus_ids"], "Tumour foci", "str"),
-        (["n_foci"], "Focus count", "int"),
-        (["n_intertumor_edges"], "Inter-tumour edges", "int"),
-        (["tumor_stroma_ratio"], "Tumour:Stroma", "num"),
-        (["tumor_pct_TS_compartment"], "Tumour", "pct"),
-        (["stroma_pct_TS_compartment"], "Stroma", "pct"),
-        (["TSR_category"], "TSR category", "str"),
-        (["sTIL_pct"], "sTIL", "pct"),
-        (["intratumoral_TIL_pct"], "iTIL", "pct"),
-        (["inter_tumor_sTILs_pct"], "Inter-tumour sTIL", "pct"),
-        (["median_focus_gap_um"], "Median focus gap", "um"),
-        (["tissue_fraction"], "Tissue", "pct_frac"),
-        (["TSR_reliable"], "TSR QC", "str"),
-        (["sTILs_reliable", "sTIL_reliable"], "sTIL QC", "str"),
-        (["iTILs_reliable"], "iTIL QC", "str"),
-        (["inter_tumor_sTILs_reliable"], "Inter-TIL QC", "str"),
+        (["tumor_island_ids"], "Tumor foci", "str"),
+        (["tumor_island_count"], "Focus count", "int"),
+        (["tumor_link_count"], "Inter-tumor edges", "int"),
+        (["tsr_tumor_to_stroma_ratio"], "Tumor:Stroma", "num"),
+        (["tsr_tumor_pct"], "Tumor", "pct"),
+        (["tsr_stroma_pct"], "Stroma", "pct"),
+        (["tsr_category"], "TSR category", "str"),
+        (["til_stromal_pct"], "sTIL", "pct"),
+        (["til_intratumoral_pct"], "iTIL", "pct"),
+        (["til_between_tumor_pct"], "Inter-tumor sTIL", "pct"),
+        (["tumor_island_gap_median_um"], "Median focus gap", "um"),
+        (["tissue_coverage_fraction"], "Tissue", "pct_frac"),
+        (["qc_tsr_ok"], "TSR QC", "str"),
+        (["qc_til_stromal_ok"], "sTIL QC", "str"),
+        (["qc_til_intratumoral_ok"], "iTIL QC", "str"),
+        (["qc_til_between_tumor_ok"], "Inter-TIL QC", "str"),
     ],
     max_cards=18,
     id_prefix="Master ROI",
@@ -1068,12 +1059,12 @@ else:
             "graph-connected scoring ecosystems",
         ),
         (
-            "Tumour foci",
+            "Tumor foci",
             fmt_int(tsr_topo["n_foci"]),
-            "retained biological tumour objects",
+            "retained biological tumor objects",
         ),
         (
-            "Inter-tumour edges",
+            "Inter-tumor edges",
             fmt_int(tsr_topo["n_intertumor_edges"]),
             "accepted corridor relationships",
         ),
@@ -1092,12 +1083,12 @@ else:
 
 ```{python}
 reference_box("Master-ROI scoring model", [
-    "Tumour focus = biological tumour object; square tumour ROIs are representative image samples and are not the TSR/TIL scoring compartment.",
-    "Master ROI = graph-connected tumour foci plus accepted inter-tumour corridors and the configured tumour-associated stromal margin.",
-    "TSR tumour/stroma percentages use the tumour + stroma compartment; the displayed TSR card is tumour % : stroma %.",
+    "Tumor focus = biological tumor object; square tumor ROIs are representative image samples and are not the TSR/TIL scoring compartment.",
+    "Master ROI = graph-connected tumor foci plus accepted inter-tumor corridors and the configured tumor-associated stromal margin.",
+    "TSR tumor/stroma percentages use the tumor + stroma compartment; the displayed TSR card is tumor % : stroma %.",
     "sTIL = stromal inflammatory area / (stroma + stromal inflammatory area) × 100.",
-    "iTIL = intratumoral inflammatory area / (tumour + intratumoral inflammatory area) × 100; this is a computational spatial proxy.",
-    "Inter-tumour sTIL = inflammatory area / (stroma + inflammatory area) × 100 within validated between-focus corridors.",
+    "iTIL = intratumoral inflammatory area / (tumor + intratumoral inflammatory area) × 100; this is a computational spatial proxy.",
+    "Inter-tumor sTIL = inflammatory area / (stroma + inflammatory area) × 100 within validated between-focus corridors.",
     "The stroma-high / stroma-low category uses the configured descriptive TSR threshold and is not a standalone clinical classification.",
     "Reliability flags indicate whether tissue coverage and denominator-area QC requirements were met."
 ])
@@ -1109,15 +1100,15 @@ reference_box("Master-ROI scoring model", [
 _tsr_scale_df = tsr_summary.copy()
 if not _tsr_scale_df.empty:
     _tsr_scale_df["_stroma_pct_from_ratio"] = tsr_pct_from_ratio(
-        _tsr_scale_df.iloc[0].get("WSI_tumor_stroma_ratio")
+        _tsr_scale_df.iloc[0].get("tsr_tumor_to_stroma_ratio")
     )[1]
 show_scales(_tsr_scale_df, TSR_SCALES)
 
 reference_box("TSR/TIL interpretation guardrails", [
-    "Tumour and stroma percentages are complementary within the tumour + stroma compartment and should sum to approximately 100%.",
-    "Stromal TIL, intratumoral TIL, and inter-tumour TIL are deliberately separate spatial compartments and should not be treated as interchangeable measurements.",
-    "Inflammatory pixels are a mutually exclusive segmentation class, so iTIL and stromal TIL are reconstructed geometrically rather than by literal tumour/inflammatory pixel overlap.",
-    "Inter-tumour TIL is only meaningful when at least one focus relationship passes routing and corridor QC.",
+    "Tumor and stroma percentages are complementary within the tumor + stroma compartment and should sum to approximately 100%.",
+    "Stromal TIL, intratumoral TIL, and inter-tumor TIL are deliberately separate spatial compartments and should not be treated as interchangeable measurements.",
+    "Inflammatory pixels are a mutually exclusive segmentation class, so iTIL and stromal TIL are reconstructed geometrically rather than by literal tumor/inflammatory pixel overlap.",
+    "Inter-tumor TIL is only meaningful when at least one focus relationship passes routing and corridor QC.",
     "All TIL quantities are segmentation-derived computational measures and require validation before being equated with standardized pathologist-scored TIL endpoints."
 ])
 ```
@@ -1130,10 +1121,10 @@ reference_box("TSR/TIL interpretation guardrails", [
 
 ---
 
-# Tumour Morphology
+# Tumor Morphology
 
 ```{python}
-section_intro("morphology", "Tumour architecture summary", "Cards, charts, cluster chips, and metric scales are arranged as a compact dashboard inspired by the PNG-style morphology panel.")
+section_intro("morphology", "Tumor architecture summary", "Cards, charts, cluster chips, and metric scales are arranged as a compact dashboard inspired by the PNG-style morphology panel.")
 ```
 
 ::: {.panel-tabset}
@@ -1143,7 +1134,7 @@ section_intro("morphology", "Tumour architecture summary", "Cards, charts, clust
 ```{python}
 if mor_summary.empty:
     display(Markdown(
-        "*No tumour morphology summary: "
+        "*No tumor morphology summary: "
         "run tumor_morphology_features.py for this slide.*"
     ))
 else:
@@ -1151,74 +1142,74 @@ else:
 
     # Extract morphology values first
     tumor_area = first_value(
-        r, "wsi_tumor_area_mm2"
+        r, "tumor_area_mm2"
     )[0]
 
     tumor_perimeter = first_value(
-        r, "wsi_tumor_perimeter_mm"
+        r, "tumor_boundary_length_mm"
     )[0]
 
     tumor_fraction = first_value(
-        r, "wsi_tumor_fraction_of_cluster"
+        r, "tumor_area_fraction"
     )[0]
 
     boundary_density = first_value(
-        r, "wsi_tumor_boundary_density_per_mm"
+        r, "tumor_edge_per_area_per_mm"
     )[0]
 
     boundary_fd = first_value(
         r,
-        "wsi_area_weighted_tumor_boundary_fractal_dimension"
+        "tumor_edge_irregularity"
     )[0]
 
     median_nnd = first_value(
         r,
-        "wsi_area_weighted_tumor_island_nnd_median_um"
+        "tumor_island_spacing_um"
     )[0]
 
     n_islands = first_value(
-        r, "wsi_tumor_n_islands"
+        r, "tumor_island_count"
     )[0]
 
     n_tumor_clusters = first_value(
-        r, "n_clusters_with_tumor"
+        r, "tumor_region_count"
     )[0]
 
     largest_patch = first_value(
         r,
-        "wsi_area_weighted_tumor_largest_patch_index"
+        "tumor_largest_island_share"
     )[0]
 
     patch_density = first_value(
-        r, "wsi_tumor_patch_density_per_mm2"
+        r, "tumor_islands_per_mm2"
     )[0]
 
     median_gap = first_value(
         r,
-        "wsi_area_weighted_tumor_island_gap_median_um"
+        "tumor_island_gap_um"
     )[0]
 
     # Display cards
     metric_cards([
         (
-            "Tumour area",
+            "Tumor area",
             f"{fmt_num(tumor_area)} mm²",
-            "total segmented tumour",
+            "total segmented tumor",
         ),
         (
-            "Tumour perimeter",
+            "Tumor perimeter",
             f"{fmt_num(tumor_perimeter)} mm",
-            "total tumour boundary",
+            "total tumor boundary",
         ),
         (
-            "Tumour fraction",
+            "Tumor fraction",
             fmt_frac_pct(tumor_fraction),
-            "of analysed cluster area",
+            "of analyzed cluster area",
         ),
         (
             "Boundary density",
             f"{fmt_num(boundary_density)} mm⁻¹",
-            "tumour perimeter (mm) / tumour area (mm²)",
+            "tumor perimeter (mm) / tumor area (mm²)",
         ),
         (
             "Boundary FD",
@@ -1226,14 +1217,14 @@ else:
             "vector box-counting estimate",
         ),
         (
-            "Tumour islands",
+            "Tumor islands",
             fmt_int(n_islands),
-            "separated tumour components",
+            "separated tumor components",
         ),
         (
-            "Tumour clusters",
+            "Tumor clusters",
             fmt_int(n_tumor_clusters),
-            "analysed clusters containing tumour",
+            "analyzed clusters containing tumor",
         ),
         (
             "Largest patch",
@@ -1243,7 +1234,7 @@ else:
         (
             "Patch density",
             f"{fmt_num(patch_density)}/mm²",
-            "tumour islands per analysed area",
+            "tumor islands per analyzed area",
         ),
         (
             "Median island gap",
@@ -1253,7 +1244,7 @@ else:
         (
             "Median island spacing",
             f"{fmt_num(median_nnd)} µm",
-            "median nearest centre-to-centre distance",
+            "median nearest center-to-center distance",
         ),
     ])
 ```
@@ -1273,20 +1264,20 @@ else:
 cluster_chips(
     mor_cluster,
     fields=[
-        (["tumor_area_mm2"], "Tumour area", "mm2"),
-        (["tumor_perimeter_mm", "tumor_perimeter_um"], "Perimeter", "mm"),
-        (["tumor_fraction_of_cluster"], "Tumour fraction", "pct_frac"),
-        (["tumor_boundary_density_per_mm"], "Boundary density", "per_mm"),
-        (["tumor_boundary_fractal_dimension"], "Boundary FD", "num"),
-        (["tumor_compactness_mean"], "Compactness", "num"),
-        (["tumor_solidity_mean"], "Solidity", "num"),
-        (["tumor_elongation_mean"], "Elongation", "num"),
-        (["tumor_n_islands"], "Islands", "int"),
-        (["tumor_largest_patch_index"], "Largest patch", "num"),
-        (["tumor_patch_density_per_mm2"], "Patch density", "density"),
-        (["tumor_island_area_median_um2"], "Median island area", "num"),
-        (["tumor_island_gap_median_um", "tumor_island_nnd_median_um"], "Median island gap", "um"),
-        (["tumor_spread_frac"], "Spread", "num"),
+        (["tumor_area_mm2"], "Tumor area", "mm2"),
+        (["tumor_boundary_length_mm"], "Perimeter", "mm"),
+        (["tumor_area_fraction"], "Tumor fraction", "pct_frac"),
+        (["tumor_edge_per_area_per_mm"], "Boundary density", "per_mm"),
+        (["tumor_edge_irregularity"], "Boundary FD", "num"),
+        (["tumor_island_roundness"], "Roundness", "num"),
+        (["tumor_island_solidity"], "Solidity", "num"),
+        (["tumor_island_elongation"], "Elongation", "num"),
+        (["tumor_island_count"], "Islands", "int"),
+        (["tumor_largest_island_share"], "Largest island share", "num"),
+        (["tumor_islands_per_mm2"], "Island density", "density"),
+        (["tumor_island_area_median_um2"], "Median island area (µm²)", "num"),
+        (["tumor_island_gap_um"], "Median island gap", "um"),
+        (["tumor_island_spread_fraction"], "Spread", "num"),
     ],
 )
 ```
@@ -1296,11 +1287,11 @@ cluster_chips(
 ```{python}
 show_scales(mor_summary, MORPH_SCALES)
 reference_box("Morphology interpretation guardrails", [
-    "Tumour perimeter is reported in mm; boundary density is perimeter divided by tumour area and is reported in mm⁻¹.",
+    "Tumor perimeter is reported in mm; boundary density is perimeter divided by tumor area and is reported in mm⁻¹.",
     "Boundary fractal dimension is a vector box-counting estimate of multiscale boundary complexity and is not a histopathological grade.",
     "Compactness, solidity, and largest-patch index are bounded descriptive geometry measures; elongation starts at 1.",
-    "Median island gap is the median nearest edge-to-edge distance between retained tumour islands; it is reported in µm. A value is undefined when fewer than two retained islands are present.",
-    "Tumour islands below the configured minimum area are excluded from primary morphology calculations."
+    "Median island gap is the median nearest edge-to-edge distance between retained tumor islands; it is reported in µm. A value is undefined when fewer than two retained islands are present.",
+    "Tumor islands below the configured minimum area are excluded from primary morphology calculations."
 ])
 ```
 
@@ -1309,14 +1300,14 @@ reference_box("Morphology interpretation guardrails", [
 
 ---
 
-# Immune Cell (TIL) Proximity to Tumour
+# Immune Cell (TIL) Proximity to Tumor
 
 ```{python}
-section_intro("proximity", "Immune spatial relationship to tumour", "Inflammatory regions are quantified relative to tumour boundaries using intratumoral fraction, 5 µm contact, 50/100/200 µm proximity fractions, area-weighted extratumoral distance, and a configurable rule-based phenotype.")
+section_intro("proximity", "Immune spatial relationship to tumor", "Inflammatory regions are quantified relative to tumor boundaries using intratumoral fraction, 5 µm contact, 50/100/200 µm proximity fractions, area-weighted extratumoral distance, and a configurable rule-based phenotype.")
 ```
 
 ```{python}
-#| fig-cap: "TIL distribution relative to the tumour boundary, by proximity zone and phenotype."
+#| fig-cap: "TIL distribution relative to the tumor boundary, by proximity zone and phenotype."
 #| label: fig-immune
 show_image(imm_d / "immune_proximity_plot.png", max_width=1800,
            missing_msg="immune proximity plot not available: run immune_proximity_features.py for this slide")
@@ -1327,22 +1318,15 @@ show_image(imm_d / "immune_proximity_plot.png", max_width=1800,
 ## Slide summary
 
 ```{python}
-# Slide summary stores TIL area in µm² only; derive mm² for display.
-_imm_cards_df = imm_summary.copy()
-if not _imm_cards_df.empty and "wsi_til_area_total_um2" in _imm_cards_df.columns:
-    _imm_cards_df["_til_area_total_mm2"] = pd.to_numeric(
-        _imm_cards_df["wsi_til_area_total_um2"], errors="coerce"
-    ) / 1e6
-
-smart_cards(_imm_cards_df, [
-    (["wsi_dominant_immune_phenotype"], "Dominant phenotype", "rule-based WSI-level phenotype", "str"),
-    (["_til_area_total_mm2"], "Inflammatory area", "total inflammatory area", "mm2"),
-    (["wsi_til_fraction_intratumoral"], "Intratumoral fraction", "fraction of inflammatory area inside tumour", "pct_frac"),
-    (["wsi_til_contact_fraction"], "Contact fraction", "within tumour-contact tolerance", "pct_frac"),
-    (["wsi_til_pct_within_50um"], "Within 50 µm", "boundary proximity", "pct"),
-    (["wsi_til_pct_within_100um"], "Within 100 µm", "boundary proximity", "pct"),
-    (["wsi_til_pct_within_200um"], "Within 200 µm", "boundary proximity", "pct"),
-    (["wsi_til_extratumoral_distance_aw_median_um"], "Median extra distance", "area-weighted", "um"),
+smart_cards(imm_summary, [
+    (["immune_phenotype"], "Dominant phenotype", "rule-based WSI-level phenotype", "str"),
+    (["til_total_area_mm2"], "Inflammatory area", "total inflammatory area", "mm2"),
+    (["til_share_inside_tumor"], "Intratumoral fraction", "fraction of inflammatory area inside tumor", "pct_frac"),
+    (["til_share_touching_tumor"], "Contact fraction", "within tumor-contact tolerance", "pct_frac"),
+    (["til_within_50um_pct"], "Within 50 µm", "boundary proximity", "pct"),
+    (["til_within_100um_pct"], "Within 100 µm", "boundary proximity", "pct"),
+    (["til_within_200um_pct"], "Within 200 µm", "boundary proximity", "pct"),
+    (["til_outside_distance_median_um"], "Median extra distance", "area-weighted", "um"),
 ])
 ```
 
@@ -1352,13 +1336,13 @@ smart_cards(_imm_cards_df, [
 cluster_chips(
     imm_cluster,
     fields=[
-        (["til_area_total_um2"], "Inflammatory area", "num"),
-        (["til_fraction_intratumoral"], "Intratumoral", "pct_frac"),
-        (["til_contact_fraction"], "Contact", "pct_frac"),
-        (["til_pct_within_50um"], "Within 50 µm", "pct"),
-        (["til_pct_within_100um"], "Within 100 µm", "pct"),
-        (["til_pct_within_200um"], "Within 200 µm", "pct"),
-        (["til_extratumoral_distance_aw_median_um"], "Extra distance", "um"),
+        (["til_total_area_mm2"], "Inflammatory area", "mm2"),
+        (["til_share_inside_tumor"], "Intratumoral", "pct_frac"),
+        (["til_share_touching_tumor"], "Contact", "pct_frac"),
+        (["til_within_50um_pct"], "Within 50 µm", "pct"),
+        (["til_within_100um_pct"], "Within 100 µm", "pct"),
+        (["til_within_200um_pct"], "Within 200 µm", "pct"),
+        (["til_outside_distance_median_um"], "Extra distance", "um"),
     ],
     badge_field="immune_phenotype",
     badge_color_fn=phenotype_color,
@@ -1372,7 +1356,7 @@ show_scales(imm_summary, IMMUNE_SCALES)
 reference_box("Immune phenotype rules used by the feature script", [
     "immune-desert: very low total TIL area, below the configured desert threshold.",
     "immune-penetrated: intratumoral TIL fraction is at least 0.30 by default.",
-    "margin-localized: at least 50% of TIL area lies within 50 µm of the tumour boundary by default.",
+    "margin-localized: at least 50% of TIL area lies within 50 µm of the tumor boundary by default.",
     "immune-excluded: extratumoral median distance is at least 100 µm by default.",
     "peritumoral: extratumoral median distance is below 100 µm when other rules do not dominate."
 ])
@@ -1385,11 +1369,11 @@ reference_box("Immune phenotype rules used by the feature script", [
 # Necrosis Features
 
 ```{python}
-section_intro("necrosis", "Necrosis burden and morphology", "Necrosis is summarized by total area, perimeter, tissue-normalized fraction, and a configurable absent/focal/present phenotype within each tumour-associated cluster.")
+section_intro("necrosis", "Necrosis burden and morphology", "Necrosis is summarized by total area, perimeter, tissue-normalized fraction, and a configurable absent/focal/present category, measured over each full tumor region (Master ROI).")
 ```
 
 ```{python}
-#| fig-cap: "Necrosis area, perimeter, and phenotype distribution across tumour clusters."
+#| fig-cap: "Necrosis area, perimeter, and category distribution across tumor regions."
 #| label: fig-necrosis
 show_image(nec_d / "necrosis_summary_figure.png", max_width=1800,
            missing_msg="necrosis summary figure not available: run necrosis_features.py for this slide")
@@ -1401,11 +1385,11 @@ show_image(nec_d / "necrosis_summary_figure.png", max_width=1800,
 
 ```{python}
 smart_cards(nec_summary, [
-    (["wsi_dominant_necrosis_phenotype", "wsi_necrosis_phenotype"], "Dominant phenotype", "area-weighted WSI-level phenotype", "str"),
-    (["wsi_necrosis_area_um2", "wsi_necrosis_area_total_um2"], "Necrosis area", "total necrotic area (µm²)", "num"),
-    (["wsi_necrosis_perimeter_um", "wsi_necrosis_total_perimeter_um"], "Necrosis perimeter", "total boundary length (µm)", "um"),
-    (["wsi_necrosis_fraction_of_cluster", "wsi_necrosis_fraction", "wsi_necrosis_frac"], "Necrosis fraction", "of analysed cluster area", "pct_frac"),
-    (["wsi_n_clusters_scored"], "Clusters scored", "tumour clusters with necrosis assessment", "int"),
+    (["necrosis_category"], "Necrosis category", "slide-level absent / focal / present", "str"),
+    (["necrosis_area_mm2"], "Necrosis area", "total necrotic area", "mm2"),
+    (["necrosis_boundary_length_mm"], "Necrosis perimeter", "total boundary length", "mm"),
+    (["necrosis_tissue_fraction"], "Necrosis fraction", "of analyzed tissue area", "pct_frac"),
+    (["region_count"], "Regions scored", "tumor regions with necrosis assessment", "int"),
 ])
 ```
 
@@ -1415,11 +1399,11 @@ smart_cards(nec_summary, [
 cluster_chips(
     nec_cluster,
     fields=[
-        (["necrosis_area_um2"], "Area (µm²)", "num"),
-        (["necrosis_perimeter_um"], "Perimeter (µm)", "um"),
-        (["necrosis_frac", "necrosis_fraction_of_cluster", "necrosis_fraction"], "Necrosis fraction", "pct_frac"),
+        (["necrosis_area_mm2"], "Area", "mm2"),
+        (["necrosis_boundary_length_mm"], "Perimeter", "mm"),
+        (["necrosis_tissue_fraction"], "Necrosis fraction", "pct_frac"),
     ],
-    badge_field="necrosis_phenotype",
+    badge_field="necrosis_category",
     badge_color_fn=phenotype_color,
 )
 ```
@@ -1428,12 +1412,12 @@ cluster_chips(
 
 ```{python}
 show_scales(nec_summary, NECROSIS_SCALES)
-reference_box("Necrosis phenotype rules used by the feature script", [
-    "absent: no necrosis polygons detected in the cluster after the noise filter (default < 500 µm² fragments excluded).",
+reference_box("Necrosis category rules used by the feature script", [
+    "absent: no necrosis polygons detected in the region after the noise filter (default < 500 µm² fragments excluded).",
     "focal: necrosis fraction is below the configured focal threshold (default 5%).",
     "present: necrosis fraction meets or exceeds the configured focal threshold.",
-    "The phenotype is a configurable computational summary rather than a standalone histopathological grade.",
-    "Necrosis area and perimeter are in physical units (µm² and µm) — scanner-independent at any MPP."
+    "The category is a configurable computational summary rather than a standalone histopathological grade.",
+    "Necrosis area and perimeter are in physical units (mm² and mm). Regions are the same Master ROIs used by the TSR, immune and morphology sections."
 ])
 ```
 

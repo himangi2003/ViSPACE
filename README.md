@@ -1,6 +1,6 @@
 # ViSPACE — Virchow2 powered Spatial Characterization and feature Extraction Pipeline
 
-ViSPACE is an end-to-end computational pathology pipeline for analysing
+ViSPACE is an end-to-end computational pathology pipeline for analyzing
 whole-slide images (WSIs)in Lung Cancer and Breast Cancer. The pipeline combines the Virchow2 foundation
 model with a pixel-wise segmentation decoder to generate five-class tissue
 segmentations and extract quantitative spatial biomarkers from the Tumor
@@ -25,7 +25,7 @@ microenvironment (TME).
 
 
 <p align="center">
-  <img src="docs/ViSpace_workflow.png" alt="ViSPACE pipeline architecture" width="800"><br>
+  <img src="docs/ViSPACE.png" alt="ViSPACE pipeline" width="800"><br>
   <em>Detailed pipeline architecture — tessellation through spatial feature extraction</em>
 </p>
 
@@ -47,7 +47,7 @@ Complete documentation is available in the **ViSPACE User Manual**.
 | Python | 3.11 |
 | GPU | NVIDIA RTX 3080 / RTX 4090 / A5000 |
 | CUDA | 12.1 |
-| RAM | 32–64 GB (depending on you slide size)|
+| RAM | 32–64 GB |
 | VRAM | ≥16 GB |
 | Storage | SSD/NVMe |
 
@@ -314,10 +314,10 @@ Vispace processes a WSI in eight sequential stages, orchestrated end-to-end by t
 | 1 | Tessellation | `vispace.tessellate` | Tile the WSI into 224×224 px patches using Mussel |
 | 2 | Segmentation | `vispace.segmenter` | Run Virchow2 + pixel-wise decoder on every patch |
 | 3 | Stitching | `vispace.stitch` | Merge per-patch masks into a slide-level GeoJSON |
-| 4 | Tumor ROI Overlay | `vispace.tumor_roi_overlay` | Identify and cluster high-Tumor-content ROI boxes |
+| 4 | Tumor ROI Overlay | `vispace.tumor_roi_overlay` | Detect tumor islands and pick representative square ROI boxes |
 | 5 | Cluster TSR / sTILs | `vispace.cluster_tils_tsr_scoring` | Compute TSR and sTILs per Tumor cluster |
 | 6 | Immune Proximity | `vispace.immune_proximity_features` | TIL–Tumor boundary distance features |
-| 7 | Necrosis Features | `vispace.necrosis_features` | Necrosis area, perimeter, and phenotype per Tumor cluster |
+| 7 | Necrosis Features | `vispace.necrosis_features` | Necrosis area, perimeter, and category per tumor region (Master ROI) |
 | 8 | Tumor Morphology | `vispace.tumor_morphology_features` | Shape, fragmentation, and perimeter features per cluster |
 
 **Segmentation classes:** Tumor · Stroma · Necrosis · Inflammatory (TILs) · Others
@@ -459,10 +459,10 @@ python -m vispace.tumor_morphology_features --from-json run_config.json --morpho
 | 1 | `vispace.tessellate` | Tile the WSI (Mussel) | `python -m vispace.tessellate --from-json run_config.json` |
 | 2 | `vispace.segmenter` | Run Virchow2 segmentation inference | `python -m vispace.segmenter --from-json run_config.json` |
 | 3 | `vispace.stitch` | Stitch tiles → WSI canvas + GeoJSON | `python -m vispace.stitch --from-json run_config.json` |
-| 4 | `vispace.tumor_roi_overlay` | Cluster tumor tiles, build ROI boxes | `python -m vispace.tumor_roi_overlay --from-json run_config.json` |
+| 4 | `vispace.tumor_roi_overlay` | Detect tumor islands, build representative ROI boxes | `python -m vispace.tumor_roi_overlay --from-json run_config.json` |
 | 5 | `vispace.cluster_tils_tsr_scoring` | TSR + sTILs scoring per cluster | `python -m vispace.cluster_tils_tsr_scoring --from-json run_config.json` |
 | 6 | `vispace.immune_proximity_features` | TIL proximity to tumor boundary | `python -m vispace.immune_proximity_features --from-json run_config.json` |
-| 7 | `vispace.necrosis_features` | Necrosis area / perimeter / phenotype per cluster | `python -m vispace.necrosis_features --from-json run_config.json` |
+| 7 | `vispace.necrosis_features` | Necrosis area / perimeter / category per tumor region | `python -m vispace.necrosis_features --from-json run_config.json` |
 | 8 | `vispace.tumor_morphology_features` | Tumor shape / fragmentation features | `python -m vispace.tumor_morphology_features --from-json run_config.json` |
 | — | `vispace.run_vispace` | Orchestrates stages 1–8, resumable | `vispace --from-json run_config.json` |
 | — | `vispace.generate_qmd_file` | Build the Quarto `.qmd` report (library function) | `from vispace import generate_report` |
@@ -545,7 +545,9 @@ cfg.OUT_DIR/
     │
     └── spatial_feature_results/
         ├── tumor_roi_overlay/
-        │   ├── tumor_roi_boxes.csv
+        │   ├── tumor_roi_boxes.csv                 # representative square image ROIs
+        │   ├── tumor_foci.geojson                  # tumor island polygons
+        │   ├── tumor_focus_tiles.csv               # tile -> tumor island membership
         │   ├── tumor_roi_boxes_pseudo_thumbnail.png
         │   └── tumor_roi_boxes_wsi_thumbnail.png   # only if the WSI file exists on disk
         │
@@ -588,63 +590,120 @@ cfg.OUT_DIR/<slide_name>/report/
 
 Column names below match the actual CSV headers written by each script. Each table shows the most commonly used columns — see the CSV itself for the complete set.
 
+### Tumor ROI Overlay (`tumor_roi_boxes.csv`)
+
+Representative square image ROIs sampled from each tumor island (at most
+`ROI_MAX_ROIS_PER_FOCUS` per island). They are image samples only: no
+feature stage scores them. Coordinates are level-0 slide pixels.
+
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `roi_id` | ROI identifier | unchanged |
+| `tumor_island_id` | Tumor island the ROI was sampled from | `focus_id` (`cluster_id` dropped) |
+| `x_min_px` / `y_min_px` / `x_max_px` / `y_max_px` | ROI box corners | `x_min` / `y_min` / `x_max` / `y_max` |
+| `center_x_px` / `center_y_px` | ROI center | `center_x` / `center_y` |
+| `roi_tile_count` | Segmentation tiles inside the ROI | `roi_tiles` |
+| `roi_tumor_fraction` / `_stroma_` / `_inflammatory_` / `_necrosis_` / `_others_fraction` | Mean tile class fractions inside the ROI | `tumor` / `stroma` / `inflammatory` / `necrosis` / `others` |
+| `roi_neighbor_tumor_fraction` | Mean tumor fraction of the 8 neighboring tiles of the ROI center | `neighbor_tumor_mean` |
+| `roi_candidate_score` | Ranking score used to pick the ROI | unchanged |
+
+`roi_size_px`, `roi_size_um` and `mpp` are no longer repeated on every row
+(they are printed in the run log). `tumor_foci.geojson` properties are
+`tumor_island_id`, `area_um2`, `perimeter_um`, `centroid_x_px`,
+`centroid_y_px`, `tumor_tile_count` and `mean_tumor_fraction`.
+
 ### TSR & sTILs (`tils_tsr_by_cluster.csv`)
 
-Scores are computed per Master ROI (a morphology-aware combined Tumor
-ecosystem). `cluster_id` is kept as a backward-compatible alias for
-`master_roi_id`; the matching polygons are in
-`cluster_scoring_polygons.geojson`.
+One row per region (a Master ROI: connected tumor islands plus the stroma
+around and between them). The matching polygons are in
+`cluster_scoring_polygons.geojson` (property `cluster_id` = `region_id`).
 
-| Column | Description |
-|--------|-------------|
-| `master_roi_id` / `cluster_id` | Master-ROI identifier (`cluster_id` is a legacy alias) |
-| `tissue_fraction` | Fraction of the ROI polygon with segmentation coverage |
-| `tumor_stroma_ratio` | Tumor area / stroma area |
-| `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` | Tumor % and stroma % within the Tumor+stroma compartment |
-| `TSR_stroma_fraction` | Raw TSR value: stroma / (Tumor + stroma) |
-| `TSR_category` | `stroma-high` (compartment stroma ≥ 50 %) / `stroma-low` / `indeterminate` |
-| `TSR_reliable` | QC flag: whether the TSR denominator met the minimum-area threshold |
-| `sTIL_pct` | Stromal sTIL % (inflammatory occupancy of the stromal compartment) |
-| `intratumoral_TIL_pct` | Intratumoral TIL % |
-| `inter_tumor_sTILs_pct` | sTIL % measured in inter-Tumor corridors |
-| `mean_focus_gap_um` / `median_focus_gap_um` / `max_focus_gap_um` | Gaps between the Tumor foci merged into the Master ROI |
-
-Each score is accompanied by a `*_reliable` QC flag (`TSR_reliable`,
-`sTILs_reliable`, `iTILs_reliable`, `inter_tumor_sTILs_reliable`).
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `region_id` | Region identifier | `master_roi_id` (`cluster_id` dropped: same value) |
+| `tumor_island_ids` / `tumor_island_count` | IDs and number of tumor islands merged into the region | `focus_ids` / `n_foci` |
+| `tumor_link_count` | Accepted stroma corridors linking those islands | `n_intertumor_edges` |
+| `region_area_mm2` | Region area (mm²) | `master_area_mm2` |
+| `tissue_coverage_fraction` | Share of the region covered by segmented tissue | `tissue_fraction` |
+| `tsr_tumor_to_stroma_ratio` | Tumor area ÷ stroma area (> 1 = more tumor) | `tumor_stroma_ratio` |
+| `tsr_tumor_pct` / `tsr_stroma_pct` | Tumor % and stroma % of (tumor + stroma); `tsr_stroma_pct` is the clinical TSR value | `tumor_pct_TS_compartment` / `stroma_pct_TS_compartment` (`TSR_stroma_fraction` dropped: = stroma % ÷ 100) |
+| `tsr_category` | `stroma-high` (stroma ≥ 50 %) / `stroma-low` / `indeterminate` | `TSR_category` |
+| `tsr_stroma_fraction_til_adjusted` | Stroma fraction counting stromal TILs as stroma and intratumoral TILs as tumor | `TSR_compartment_stroma_fraction` |
+| `til_stromal_pct` | % of tumor-associated stroma occupied by immune cells | `sTIL_pct` |
+| `til_intratumoral_pct` | % of the tumor area occupied by immune cells | `intratumoral_TIL_pct` |
+| `til_between_tumor_pct` | Immune-cell % in the stroma corridors between tumor islands | `inter_tumor_sTILs_pct` |
+| `tumor_island_gap_mean_um` / `_median_um` / `_max_um` | Gaps between the merged tumor islands (µm) | `mean_/median_/max_focus_gap_um` |
+| `qc_tsr_ok` / `qc_til_stromal_ok` / `qc_til_intratumoral_ok` / `qc_til_between_tumor_ok` | QC flags: enough tissue / denominator area for each score | `TSR_reliable` / `sTILs_reliable` / `iTILs_reliable` / `inter_tumor_sTILs_reliable` |
 
 ### Immune Proximity (`immune_proximity_by_cluster.csv`)
 
-| Column | Description |
-|--------|-------------|
-| `til_pct_within_50um` / `_100um` / `_200um` | % TIL area within each distance of the Tumor boundary (one column per `IMMUNE_PROXIMITY_THRESHOLDS_UM` value; default 50 / 100 / 200 µm) |
-| `til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
-| `til_fraction_intratumoral` | Fraction of TIL area located inside the Tumor |
-| `til_extratumoral_distance_aw_median_um` | Area-weighted median distance for extratumoral TILs |
-| `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` |
+Areas are reported in mm².
+
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `region_id` | Region identifier | `cluster_id` |
+| `roi_box_count` | Number of tumor ROI boxes in the region | `n_roi_boxes` |
+| `region_area_mm2` | Region area (mm²) | `cluster_area_mm2` (`cluster_area_um2` dropped) |
+| `til_total_area_mm2` | Total immune-cell (TIL) area | `til_area_total_um2` (µm²) |
+| `til_inside_area_mm2` / `til_outside_area_mm2` | TIL area inside / outside the tumor | `til_area_intratumoral_um2` / `til_area_extratumoral_um2` (µm²) |
+| `til_touching_area_mm2` | TIL area within the contact tolerance (default 5 µm) of the tumor edge | `til_contact_area_um2` (µm²) |
+| `til_share_inside_tumor` | Share of all TIL area that lies inside the tumor (0–1) | `til_fraction_intratumoral` |
+| `til_share_touching_tumor` | Share of TIL area touching the tumor edge (0–1) | `til_contact_fraction` |
+| `til_within_50um_pct` / `_100um_pct` / `_200um_pct` | % TIL area within each distance of the tumor edge (counts both sides of the edge) | `til_pct_within_50um` / `_100um` / `_200um` |
+| `til_outside_distance_median_um` | Typical (area-weighted median) distance of TILs outside the tumor | `til_extratumoral_distance_aw_median_um` |
+| `immune_phenotype` | `immune-desert` / `immune-excluded` / `margin-localized` / `peritumoral` / `immune-penetrated` | unchanged |
+
+`til_intratumoral_pct` (TSR: how much of the tumor is occupied by TILs) and
+`til_share_inside_tumor` (immune proximity: what share of all TILs sit inside
+the tumor) answer different questions and are not interchangeable.
 
 ### Necrosis Features (`necrosis_feature_by_cluster.csv`)
 
-| Column | Description |
-|--------|-------------|
-| `cluster_id` | Spatial Tumor cluster identifier |
-| `necrosis_area_um2` | Total necrosis polygon area in the cluster (µm²) |
-| `necrosis_perimeter_um` | Total necrosis polygon perimeter in the cluster (µm) |
-| `necrosis_frac` | Necrosis area / total tissue area in the cluster |
-| `necrosis_phenotype` | `absent` / `focal` (frac < 5%) / `present` (frac ≥ 5%) |
-| `tissue_area_um2` | Total tissue area in the cluster (µm², context for the fraction) |
+Necrosis is measured over each full tumor region: the Master ROI polygons in
+`cluster_scoring_polygons.geojson`. `region_id` therefore matches the TSR,
+immune-proximity and morphology tables. (Earlier versions scored only the
+representative ROI boxes, which are chosen to avoid necrosis and
+under-estimated it; values from those runs are not comparable.)
 
-Necrosis fragments below 500 µm² are treated as segmentation noise and excluded. A WSI-level roll-up (`necrosis_feature_wsi_summary.csv`) reports the area-weighted dominant phenotype and slide totals.
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `region_id` | Region identifier | `cluster_id` |
+| `necrosis_area_mm2` | Total necrosis area in the region (mm²) | `necrosis_area_um2` (µm²) |
+| `necrosis_boundary_length_mm` | Total necrosis edge length in the region (mm) | `necrosis_perimeter_um` (µm) |
+| `necrosis_tissue_fraction` | Necrosis area ÷ tissue area in the region (0–1) | `necrosis_frac` |
+| `necrosis_category` | `absent` / `focal` (< 5 %) / `present` (≥ 5 %) | `necrosis_phenotype` |
+| `tissue_area_mm2` | Total tissue area in the region (mm²) | `tissue_area_um2` (µm²) |
+
+Necrosis fragments below 500 µm² are treated as segmentation noise and excluded.
+
+**Slide summary (`necrosis_feature_wsi_summary.csv`)**
+
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `region_count` | Number of regions scored | `wsi_n_clusters_scored` |
+| `necrosis_area_mm2` | Total necrosis area (mm²) | `wsi_necrosis_area_um2` (µm²) |
+| `necrosis_boundary_length_mm` | Total necrosis edge length (mm) | `wsi_necrosis_perimeter_um` (µm) |
+| `necrosis_tissue_fraction` | Necrosis area ÷ tissue area across the slide (0–1) | `wsi_necrosis_fraction_of_cluster` |
+| `necrosis_category` | absent / focal / present, applied to the slide-wide fraction | `wsi_dominant_necrosis_phenotype` |
 
 ### Tumor Morphology (`tumor_core_features_by_cluster.csv`)
 
-| Column | Description |
-|--------|-------------|
-| `tumor_area_um2` | Total Tumor area in µm² |
-| `tumor_solidity_mean` | Area-weighted mean of (island area / island convex-hull area) |
-| `tumor_compactness_mean` | Area-weighted mean of 4π·area / perimeter² per island |
-| `tumor_elongation_mean` | Area-weighted mean major/minor axis ratio |
-| `tumor_n_islands` | Number of disconnected Tumor islands (above the min-area filter) |
-| `tumor_largest_patch_index` | Fraction of total Tumor area in the single largest island; lower = more fragmented |
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `region_id` / `roi_box_count` / `region_area_mm2` | Region identifier, number of ROI boxes, region area (mm²) | `cluster_id` / `n_roi_boxes` / `cluster_area_mm2` |
+| `tumor_area_mm2` | Tumor area (mm²) | unchanged |
+| `tumor_boundary_length_mm` | Tumor edge length (mm) | `tumor_perimeter_mm` (`tumor_perimeter_um` dropped) |
+| `tumor_area_fraction` | Tumor area ÷ region area | `tumor_fraction_of_cluster` |
+| `tumor_edge_per_area_per_mm` | Tumor edge length ÷ tumor area | `tumor_boundary_density_per_mm` |
+| `tumor_edge_irregularity` | Boundary fractal dimension (~1 smooth, near 2 jagged) | `tumor_boundary_fractal_dimension` |
+| `tumor_island_roundness` / `_solidity` / `_elongation` | Area-weighted island shape (4π·area/perimeter², area/convex hull, length/width) | `tumor_compactness_mean` / `tumor_solidity_mean` / `tumor_elongation_mean` |
+| `tumor_island_count` | Number of separate tumor islands (above the min-area filter) | `tumor_n_islands` |
+| `tumor_largest_island_share` | Share of tumor area in the largest island; lower = more fragmented | `tumor_largest_patch_index` |
+| `tumor_islands_per_mm2` | Tumor islands per mm² of region area | `tumor_patch_density_per_mm2` |
+| `tumor_island_area_median_um2` | Median island area (µm²) | unchanged |
+| `tumor_island_spacing_um` / `tumor_island_gap_um` | Median center-to-center / edge-to-edge distance to the nearest island (µm) | `tumor_island_nnd_median_um` / `tumor_island_gap_median_um` |
+| `tumor_island_spread_fraction` | How widely the islands spread across the region (0–1) | `tumor_spread_frac` |
+| `qc_min_island_area_um2` / `qc_morphology_ok` / `qc_morphology_note` | Island-size filter used, validity flag, reason if invalid | `min_island_area_um2_used` / `tumor_valid_morphology` / `tumor_invalid_reason` |
 
 ### Slide-level summaries (`*_wsi_summary.csv`)
 
@@ -655,46 +714,53 @@ written.
 
 **TSR & sTILs (`tils_tsr_wsi_summary.csv`)**
 
-| Column | Description |
-|--------|-------------|
-| `WSI_tumor_stroma_ratio` | Tumor area / stroma area across all Master ROIs (stroma % = 100 / (1 + ratio)) |
-| `WSI_TSR_category` | `stroma-high` / `stroma-low` |
-| `WSI_sTIL_pct` | Stromal TIL % |
-| `WSI_neighborhood_intratumoral_TIL_pct` | Intratumoral TIL % |
-| `WSI_inter_tumor_sTILs_pct` | Stromal TIL % in inter-Tumor corridors (empty when no corridors pass QC) |
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `tsr_tumor_to_stroma_ratio` | Tumor area ÷ stroma area across all regions (stroma % = 100 / (1 + ratio)) | `WSI_tumor_stroma_ratio` |
+| `tsr_category` | `stroma-high` / `stroma-low` | `WSI_TSR_category` |
+| `til_stromal_pct` | % of tumor-associated stroma occupied by immune cells | `WSI_sTIL_pct` |
+| `til_intratumoral_pct` | % of the tumor area occupied by immune cells | `WSI_neighborhood_intratumoral_TIL_pct` |
+| `til_between_tumor_pct` | Immune-cell % in stroma corridors between tumor islands (empty when no corridors pass QC) | `WSI_inter_tumor_sTILs_pct` |
 
 **Immune proximity (`immune_proximity_wsi_summary.csv`)**
 
-| Column | Description |
-|--------|-------------|
-| `wsi_til_area_total_um2` | Total TIL area (µm²) |
-| `wsi_til_fraction_intratumoral` | Fraction of TIL area inside the Tumor |
-| `wsi_til_contact_fraction` | Fraction of TIL area within the contact tolerance (default 5 µm) |
-| `wsi_til_pct_within_50um` / `_100um` / `_200um` | % TIL area within 50 / 100 / 200 µm of the Tumor boundary |
-| `wsi_til_extratumoral_distance_aw_median_um` | Area-weighted median distance of extratumoral TILs |
-| `wsi_dominant_immune_phenotype` | Phenotype covering the most TIL area |
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `til_total_area_mm2` | Total TIL area (mm²) | `wsi_til_area_total_um2` (µm²) |
+| `til_share_inside_tumor` | Share of TIL area inside the tumor (0–1) | `wsi_til_fraction_intratumoral` |
+| `til_share_touching_tumor` | Share of TIL area within the contact tolerance (default 5 µm) of the tumor edge | `wsi_til_contact_fraction` |
+| `til_within_50um_pct` / `_100um_pct` / `_200um_pct` | % TIL area within 50 / 100 / 200 µm of the tumor edge | `wsi_til_pct_within_50um` / `_100um` / `_200um` |
+| `til_outside_distance_median_um` | Area-weighted median distance of TILs outside the tumor | `wsi_til_extratumoral_distance_aw_median_um` |
+| `immune_phenotype` | Phenotype covering the most TIL area | `wsi_dominant_immune_phenotype` |
 
 **Tumor morphology (`tumor_core_wsi_summary.csv`)**
 
-| Column | Description |
-|--------|-------------|
-| `n_clusters_with_tumor` | Number of analysed clusters containing tumor |
-| `wsi_tumor_n_islands` | Total number of retained tumor islands (above the min-area filter) |
-| `wsi_cluster_area_mm2` / `wsi_tumor_area_mm2` | Analysed cluster area and Tumor area (mm²) |
-| `wsi_tumor_perimeter_mm` | Total Tumor boundary length (mm) |
-| `wsi_tumor_fraction_of_cluster` | Tumor area / cluster area |
-| `wsi_tumor_boundary_density_per_mm` | Tumor perimeter (mm) / Tumor area (mm²) |
-| `wsi_tumor_patch_density_per_mm2` | Tumor islands per mm² of cluster area |
-| `wsi_area_weighted_tumor_largest_patch_index` | Area-weighted largest-patch index |
-| `wsi_area_weighted_tumor_compactness_mean` / `_solidity_mean` / `_elongation_mean` | Area-weighted island shape |
-| `wsi_area_weighted_tumor_boundary_fractal_dimension` | Area-weighted boundary fractal dimension |
-| `wsi_area_weighted_tumor_island_nnd_median_um` / `_island_gap_median_um` | Median island centre-to-centre and edge-to-edge spacing (µm) |
+Shape and spacing values are computed per analyzed region and averaged
+across regions, weighted by tumor area.
+
+| Column | Description | Previous name |
+|--------|-------------|---------------|
+| `tumor_region_count` | Number of analyzed regions containing tumor | `n_clusters_with_tumor` |
+| `tumor_island_count` | Number of separate tumor islands (above the min-area filter) | `wsi_tumor_n_islands` |
+| `analyzed_area_mm2` | Total analyzed tissue area (mm²) | `wsi_cluster_area_mm2` |
+| `tumor_area_mm2` | Total tumor area (mm²) | `wsi_tumor_area_mm2` |
+| `tumor_boundary_length_mm` | Total length of the tumor edge (mm) | `wsi_tumor_perimeter_mm` |
+| `tumor_area_fraction` | Share of the analyzed area that is tumor (0–1) | `wsi_tumor_fraction_of_cluster` |
+| `tumor_edge_per_area_per_mm` | Tumor edge length ÷ tumor area; higher = more ragged / fragmented | `wsi_tumor_boundary_density_per_mm` |
+| `tumor_islands_per_mm2` | Tumor islands per mm² of analyzed area | `wsi_tumor_patch_density_per_mm2` |
+| `tumor_largest_island_share` | Share of tumor area in the largest island; lower = more fragmented | `wsi_area_weighted_tumor_largest_patch_index` |
+| `tumor_island_roundness` | how close the islands are to a circle (0–1; 4π·area / perimeter²) | `wsi_area_weighted_tumor_compactness_mean` |
+| `tumor_island_solidity` | How filled-in vs. indented the islands are (0–1; area / convex-hull area) | `wsi_area_weighted_tumor_solidity_mean` |
+| `tumor_island_elongation` | Length ÷ width of the islands (1 = not elongated) | `wsi_area_weighted_tumor_elongation_mean` |
+| `tumor_edge_irregularity` | Boundary fractal dimension: ~1 = smooth edge, closer to 2 = very jagged | `wsi_area_weighted_tumor_boundary_fractal_dimension` |
+| `tumor_island_spacing_um` | Typical center-to-center distance to the nearest island (µm) | `wsi_area_weighted_tumor_island_nnd_median_um` |
+| `tumor_island_gap_um` | Typical edge-to-edge gap to the nearest island (µm) | `wsi_area_weighted_tumor_island_gap_median_um` |
 
 ---
 
 ## Citation
 
-If you use Vispace in your research, please cite the associated publication (forthcoming). This repository is in the submission so we are waiting for the CITATION
+If you use Vispace in your research, please cite the associated publication (forthcoming).
 
 ---
 
