@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use ViSPACE in your research, please cite it as below."
+title: "ViSPACE: Virchow2 powered Spatial Characterization and feature Extraction Pipeline"
+abstract: "End-to-end computational pathology pipeline for whole-slide images in Lung and Breast Cancer, combining the Virchow2 foundation model with a segmentation decoder to extract spatial tumor-microenvironment biomarkers."
+authors:
+  - family-names: Srivastava
+    given-names: Himangi
+    orcid: "https://orcid.org/0000-0003-2640-0865"
+    affiliation: "Deasy Lab, Memorial Sloan Kettering Cancer Center"
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/himangi2003/ViSPACE"
+version: 0.1.0
+date-released: 2026-10-29
+keywords:
+  - computational-pathology
+  - whole-slide-imaging
+  - digital-pathology
+  - tumor-microenvironment
+  - segmentation
