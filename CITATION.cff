@@ -7,10 +7,12 @@ authors:
     given-names: Himangi
     orcid: "https://orcid.org/0000-0003-2640-0865"
     affiliation: "Deasy Lab, Memorial Sloan Kettering Cancer Center"
+    
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/himangi2003/ViSPACE"
 version: 0.1.0
+doi: 10.5281/zenodo.23775086
 date-released: 2026-10-29
 keywords:
   - computational-pathology

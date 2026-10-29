@@ -760,8 +760,13 @@ across regions, weighted by tumor area.
 
 ## Citation
 
-If you use Vispace in your research, please cite the associated publication (forthcoming).
+If you use ViSPACE in your research, please cite the software:
 
+> Srivastava, H. *ViSPACE: Virchow2 powered Spatial Characterization and feature Extraction Pipeline* (Version 0.1.0). Zenodo. https://doi.org/10.5281/zenodo.23775086
+
+A publication describing ViSPACE is forthcoming.
+
+[![DOI](https://zenodo.org/badge/1279686326.svg)](https://doi.org/10.5281/zenodo.23775086)
 ---
 
 ## License
